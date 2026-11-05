@@ -1,0 +1,32 @@
+[
+  {
+    "name": "worker-01",
+    "host": "worker-01",
+    "ssh_port": 22,
+    "ssh_user": "agent",
+    "ssh_key": "ssh_client_key",
+    "threads": 8,
+    "storage_path": "/data/videos",
+    "min_free_space_gb": 1
+  },
+  {
+    "name": "worker-02",
+    "host": "worker-02",
+    "ssh_port": 22,
+    "ssh_user": "agent",
+    "ssh_key": "ssh_client_key",
+    "threads": 16,
+    "storage_path": "/data/videos",
+    "min_free_space_gb": 1
+  },
+  {
+    "name": "worker-03",
+    "host": "worker-03",
+    "ssh_port": 22,
+    "ssh_user": "agent",
+    "ssh_key": "ssh_client_key",
+    "threads": 2,
+    "storage_path": "/data/videos",
+    "min_free_space_gb": 1
+  }
+]

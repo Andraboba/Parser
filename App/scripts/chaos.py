@@ -3,6 +3,8 @@
 в pytest, потому что нужны настоящие docker kill и docker stop.
 
 Запуск: python scripts/chaos.py [сценарий ...]. Только стандартная библиотека.
+Часть сценариев управляет агентом через файл заглушки, поэтому стенд нужен с заглушками:
+    COORD_AGENT_KIND=stub docker compose up -d --build
 Базовый адрес: COORD_URL, по умолчанию https://localhost:8443 с проверкой по deploy/tls/ca.crt.
 Вход под администратором, пароль: COORD_ADMIN_PASSWORD или файл secrets/coord_admin_password.
 """
@@ -84,6 +86,21 @@ def workers() -> dict[str, dict[str, Any]]:
     return {w["name"]: w for w in api("GET", "/api/workers")}
 
 
+def control(service: str, values: str) -> None:
+    """Управляющий файл заглушки на сервере. От имени агента: иначе он не сможет его удалить."""
+    compose("exec", "-T", "--user", "agent", service, "sh", "-c",
+            f"echo '{values}' > /tmp/stub-control.json")
+
+
+def clear_control(service: str) -> None:
+    compose("exec", "-T", "--user", "agent", service, "rm", "-f", "/tmp/stub-control.json")
+
+
+def restarts(name: str) -> int:
+    """Сколько раз координатор поднимал упавшего агента по SSH."""
+    return int((workers()[name]["container_state"] or {}).get("restart_count") or 0)
+
+
 def wait_online(*names: str) -> None:
     wait_for(f"узлы в сети: {names}", lambda: all(
         workers().get(n, {}).get("status") == "online" for n in names
@@ -135,24 +152,16 @@ def scenario_stop_worker() -> str:
 
 
 def scenario_crash_by_command() -> str:
-    """Падение по команде: restart policy поднимает контейнер, агент продолжает с next_id."""
+    """Агент упал на сервере: координатор сам поднимает его по SSH, работа идёт с next_id."""
     wait_online("worker-03")
-    container = compose("ps", "-q", "worker-03").strip()
+    before = restarts("worker-03")
     job_id = new_job("[1,6000]", 300)
     wait_for("узел взял блок", lambda: workers()["worker-03"]["leased_chunks"] > 0)
-    compose("exec", "-T", "worker-03", "sh", "-c",
-            'echo \'{"crash": true}\' > /tmp/stub-control.json')
-
-    def restarts() -> int:
-        return int(subprocess.run(
-            ["docker", "inspect", "-f", "{{.RestartCount}}", container],
-            capture_output=True, text=True, check=True,
-        ).stdout)
-
-    wait_for("контейнер перезапущен политикой", lambda: restarts() >= 1)
+    control("worker-03", '{"crash": true}')
+    wait_for("агент поднят по SSH", lambda: restarts("worker-03") > before)
     check_complete(job_id, 6000)
     wait_online("worker-03")
-    return f"перезапусков контейнера: {restarts()}, задание завершено"
+    return f"перезапусков агента: {restarts('worker-03')}, задание завершено"
 
 
 def scenario_restart_api() -> str:
@@ -195,8 +204,7 @@ def scenario_restart_database() -> str:
 def scenario_low_disk() -> str:
     """Нехватка места: узел перестаёт получать блоки, остальные работают."""
     wait_online("worker-01", "worker-02")
-    compose("exec", "-T", "worker-01", "sh", "-c",
-            'echo \'{"disk_free_bytes": 1000}\' > /tmp/stub-control.json')
+    control("worker-01", '{"disk_free_bytes": 1000}')
     try:
         wait_for("узел сообщил о нехватке места",
                  lambda: workers()["worker-01"]["metrics"].get("disk_free_bytes") == 1000)
@@ -206,7 +214,7 @@ def scenario_low_disk() -> str:
         assert workers()["worker-01"]["leased_chunks"] == 0
         check_complete(job_id, 10000)
     finally:
-        compose("exec", "-T", "worker-01", "rm", "-f", "/tmp/stub-control.json")
+        clear_control("worker-01")
     wait_for("узел снова получает блоки", lambda: (
         new_job("[1,2000]", 100) and workers()["worker-01"]["lease_block_reason"] is None
     ))
@@ -217,8 +225,7 @@ def scenario_rate_limited() -> str:
     """429 от внешнего сервиса снижает общую частоту запросов."""
     wait_online("worker-01", "worker-02", "worker-03")
     base = api("GET", "/api/rate-limit")["base_rps"]
-    compose("exec", "-T", "worker-02", "sh", "-c",
-            'echo \'{"rate_limited": true}\' > /tmp/stub-control.json')
+    control("worker-02", '{"rate_limited": true}')
     try:
         job_id = new_job("[1,5000]", 200)
         wait_for("лимит снизился", lambda: (
@@ -226,7 +233,7 @@ def scenario_rate_limited() -> str:
         ))
         low = api("GET", "/api/rate-limit")["effective_rps"]
     finally:
-        compose("exec", "-T", "worker-02", "rm", "-f", "/tmp/stub-control.json")
+        clear_control("worker-02")
     api("POST", f"/api/jobs/{job_id}/stop")
     wait_for("лимит восстановился", lambda: (
         (api("GET", "/api/rate-limit")["effective_rps"] or 0) >= base * 0.9
@@ -235,19 +242,23 @@ def scenario_rate_limited() -> str:
 
 
 def scenario_recreate_new_ip() -> str:
-    """Контейнер пересоздан с новым адресом: тот же узел, блок возвращён, задание идёт дальше."""
+    """Сервер пересоздан начисто: координатор сам заново ставит агента, узел тот же."""
     wait_online("worker-03")
     before = workers()["worker-03"]
+
+    def deploys() -> int:
+        return len(api("GET", f"/api/events?operation=agent.deploy&worker_id={before['id']}"))
+
+    installed = deploys()
     job_id = new_job("[1,8000]", 400)
     wait_for("узел взял блок", lambda: workers()["worker-03"]["leased_chunks"] > 0)
     compose("up", "-d", "--force-recreate", "--no-deps", "worker-03")
-    wait_for("новый контейнер зарегистрировался", lambda: (
-        workers()["worker-03"]["container_id"] != before["container_id"]
-    ))
+    wait_for("агент установлен заново", lambda: deploys() > installed)
+    wait_online("worker-03")
     after = workers()["worker-03"]
     assert after["id"] == before["id"], "узел должен сохранить идентификатор"
     check_complete(job_id, 8000)
-    return f"id {after['id']} сохранён, контейнер сменился, адрес {after['last_ip']}"
+    return f"id {after['id']} сохранён, агент установлен заново, адрес {after['last_ip']}"
 
 
 def scenario_network_loss() -> str:
@@ -272,26 +283,17 @@ def scenario_network_loss() -> str:
 
 
 def scenario_oom_kill() -> str:
-    """Настоящий OOM-kill по лимиту контейнера: политика перезапускает, задание идёт дальше."""
+    """Настоящий OOM-kill по лимиту сервера: ядро убивает агента, координатор поднимает его."""
     wait_online("worker-03")
-    container = compose("ps", "-q", "worker-03").strip()
-
-    def restarts() -> int:
-        return int(subprocess.run(
-            ["docker", "inspect", "-f", "{{.RestartCount}}", container],
-            capture_output=True, text=True, check=True,
-        ).stdout)
-
-    before = restarts()
+    before = restarts("worker-03")
     job_id = new_job("[1,6000]", 300)
     wait_for("узел взял блок", lambda: workers()["worker-03"]["leased_chunks"] > 0)
-    compose("exec", "-T", "worker-03", "sh", "-c",
-            # Docker разрешает своп размером в лимит памяти: всего 512 МБ при лимите 256 МБ.
-            'echo \'{"allocate_mb": 800}\' > /tmp/stub-control.json')
-    wait_for("контейнер убит и перезапущен", lambda: restarts() > before)
+    # Docker разрешает своп размером в лимит памяти: всего 512 МБ при лимите 256 МБ.
+    control("worker-03", '{"allocate_mb": 800}')
+    wait_for("агент убит и поднят по SSH", lambda: restarts("worker-03") > before)
     check_complete(job_id, 6000)
     wait_online("worker-03")
-    return f"перезапусков стало {restarts()}, дубликатов нет"
+    return f"перезапусков стало {restarts('worker-03')}, дубликатов нет"
 
 
 def scenario_real_disk_full() -> str:
@@ -300,6 +302,8 @@ def scenario_real_disk_full() -> str:
     name = "chaos-disk-full"
     token = api("POST", "/api/agent-tokens", {"worker_name": name})
     subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    subprocess.run(["docker", "build", "-q", "-t", "coord/agent-stub:dev", "stub"],
+                   check=True, capture_output=True)
     subprocess.run([
         "docker", "run", "-d", "--name", name, "--network", "coord_default",
         "--tmpfs", "/data/videos:size=2m,uid=10001", "-v", "coord-tls-ca:/certs:ro",

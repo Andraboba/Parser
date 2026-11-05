@@ -151,7 +151,9 @@ async def worker_snapshots(session: AsyncSession, settings: Settings) -> list[Wo
             else worker.min_free_space_gb
         )
         snapshots.append(WorkerSnapshot(
-            id=worker.id, name=worker.name, enabled=worker.enabled,
+            # Агента остановил оператор: это его решение, а не авария.
+            id=worker.id, name=worker.name,
+            enabled=worker.enabled and worker.desired_agent_state != "stopped",
             online=worker.status == WorkerStatus.ONLINE,
             heartbeat_age_seconds=(
                 (now - worker.last_heartbeat_at).total_seconds()

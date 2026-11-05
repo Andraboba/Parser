@@ -70,7 +70,7 @@ export default function TerminalPage({ id }: { id: number }) {
       <p>
         <a href={`#/workers/${id}`}>← Узел</a>
       </p>
-      <h1>Терминал контейнера</h1>
+      <h1>Терминал</h1>
       <p className="muted" role="status">
         {state}
       </p>

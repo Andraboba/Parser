@@ -184,7 +184,8 @@ async def sync_containers(session: AsyncSession, containers: list[dict[str, Any]
     """Контейнер пропал или не запущен: узел недоступен сразу, не дожидаясь heartbeat.
     Узлы вне управления runner-а (их никогда не было в списке) не трогаем."""
     by_worker = {c["worker"]: c for c in containers}
-    workers = list(await session.scalars(select(Worker)))
+    # Серверы по SSH для координатора отдельные машины: их состояние проверяется по SSH.
+    workers = list(await session.scalars(select(Worker).where(Worker.provisioning_mode != "ssh")))
     for worker in workers:
         container = by_worker.get(worker.name)
         if container is not None:

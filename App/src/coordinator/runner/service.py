@@ -11,6 +11,7 @@ from typing import Any
 from coordinator.runner.docker import DockerClient, DockerError
 
 WORKER_LABEL = "lab.worker"
+SERVER_LABEL = "lab.server"
 MANAGED_LABEL = "lab.managed"
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 # Что можно передать контейнеру агента. Остальное (LD_PRELOAD, PATH и прочее) отбрасывается.
@@ -147,6 +148,37 @@ class Runner:
         })
         await self.docker.start(container_id)
         return {"worker": spec.name, "id": container_id[:12], "image": spec.image}
+
+    async def create_server(
+        self, name: str, image: str, cpus: float, memory_mb: int, public_key: str,
+    ) -> dict[str, str]:
+        """Новый контейнер-сервер. Дальше координатор работает с ним только по SSH."""
+        if not NAME_PATTERN.fullmatch(name):
+            raise RunnerError(422, "invalid_name", "имя сервера: строчные буквы, цифры и дефис")
+        if await self.docker.list_by_label(SERVER_LABEL, name):
+            raise RunnerError(409, "already_exists", f"сервер {name} уже существует")
+        host = f"lab-{name}"
+        await self.docker.ensure_image(image)
+        container_id = await self.docker.create(host, {
+            "Image": image,
+            "Hostname": host,
+            "Env": [f"SSH_AUTHORIZED_KEY={public_key}"],
+            "Labels": {SERVER_LABEL: name, MANAGED_LABEL: "true"},
+            "HostConfig": {
+                "NanoCpus": int(cpus * 1e9),
+                "Memory": memory_mb * 1024**2,
+                "RestartPolicy": {"Name": "unless-stopped"},
+                "Init": True,
+                "Binds": [
+                    f"lab-videos-{name}:/data/videos", f"lab-sshkeys-{name}:/etc/ssh/keys",
+                    "coord-tls-ca:/certs:ro",
+                ],
+                "NetworkMode": self.network,
+                "Privileged": False,
+            },
+        })
+        await self.docker.start(container_id)
+        return {"server": name, "host": host, "id": container_id[:12]}
 
     async def update_image(self, worker: str, image: str) -> dict[str, str]:
         """Шаг 1 обновления: новый контейнер из нового образа. Старый только остановлен, поэтому

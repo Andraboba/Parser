@@ -4,6 +4,7 @@ import { useAuth } from "../auth";
 import { getWorker, patchWorker, type WorkerPatch } from "../api";
 import { ErrorMessage } from "../components";
 import { ContainerPanel } from "../ContainerPanel";
+import { ServerPanel } from "../ServerPanel";
 import { BLOCK_REASONS, bytes, count, dateTime, duration } from "../format";
 import { errorText, usePolling } from "../usePolling";
 
@@ -94,9 +95,13 @@ export function WorkerPage({ id }: { id: number }) {
             )}
             <dl className="stats">
               <Stat label="Адрес" value={worker.last_ip ?? "—"} />
-              <Stat label="Версия агента" value={worker.agent_version} />
-              <Stat label="Образ" value={worker.image ?? "—"} />
-              <Stat label="Контейнер" value={worker.container_id ?? "—"} />
+              <Stat label="Версия агента" value={worker.agent_version || "—"} />
+              {worker.provisioning_mode !== "ssh" && (
+                <>
+                  <Stat label="Образ" value={worker.image ?? "—"} />
+                  <Stat label="Контейнер" value={worker.container_id ?? "—"} />
+                </>
+              )}
               <Stat label="Режим" value={worker.provisioning_mode} />
               <Stat label="Heartbeat" value={dateTime(worker.last_heartbeat_at)} />
               <Stat label="Время работы" value={duration(metrics.uptime_seconds)} />
@@ -155,7 +160,11 @@ export function WorkerPage({ id }: { id: number }) {
               <Stat label="Сеть, передача/с" value={bytes(metrics.net_tx_bps)} />
             </dl>
           </section>
-          <ContainerPanel worker={worker} onDone={refresh} />
+          {worker.provisioning_mode === "ssh" ? (
+            <ServerPanel worker={worker} onDone={refresh} />
+          ) : (
+            <ContainerPanel worker={worker} onDone={refresh} />
+          )}
           {canOperate && (
           <form className="card" onSubmit={submit}>
             <h2>Настройки</h2>

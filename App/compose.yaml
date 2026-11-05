@@ -1,5 +1,8 @@
 # Стенд одной командой: scripts/init-env.sh && docker compose up -d --build
 # Интерфейс и API: https://localhost:8443, сертификат подписан CA из deploy/tls/ca.crt.
+#
+# Рабочие серверы — контейнеры с SSH вместо арендованных машин (worker-01..03). Координатор сам
+# входит на них по SSH, ставит и запускает агентов: как на настоящих серверах, только бесплатно.
 name: coord
 
 x-app-env: &app-env
@@ -9,20 +12,24 @@ x-app-env: &app-env
   COORD_GLOBAL_RPS_LIMIT: ${COORD_GLOBAL_RPS_LIMIT:-3000}
   COORD_RUNNER_URL: http://runner:9000
   COORD_COOKIE_SECURE: "true"
+  COORD_AGENT_KIND: ${COORD_AGENT_KIND:-real}
+  # Управляемый тестовый сайт стенда. Настоящий внешний сайт задаётся только явно.
+  COORD_AGENT_SITE_TEMPLATE: http://site:8081/page/{id}
 
-x-worker: &worker
-  build: { context: stub }
-  image: coord/agent-stub:dev
+x-server: &server
+  build: { context: deploy/ssh-server }
+  image: coord/ssh-server:dev
   restart: unless-stopped
+  # Агент здесь обычный процесс: кто-то должен прибирать завершившиеся процессы.
+  init: true
+  secrets: [ssh_client_key_pub]
   depends_on:
-    web: { condition: service_healthy }
     tls-init: { condition: service_completed_successfully }
-
-x-worker-env: &worker-env
-  COORD_URL: https://web
-  # Проверка сертификата координатора: urllib читает эту переменную.
-  SSL_CERT_FILE: /certs/ca.crt
-  AGENT_IMAGE: coord/agent-stub:dev
+  healthcheck:
+    test: ["CMD", "pgrep", "sshd"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
 
 services:
   db:
@@ -56,8 +63,11 @@ services:
     build: { context: ., dockerfile: deploy/Dockerfile, target: runtime }
     image: coord/platform:dev
     command: ["sh", "-c", "alembic upgrade head && python -m coordinator.bootstrap"]
-    environment: *app-env
-    secrets: [coord_admin_password, coord_agent_tokens]
+    environment:
+      <<: *app-env
+      COORD_SEED_SERVERS_FILE: /etc/coordinator/servers.json
+    secrets: [coord_admin_password]
+    volumes: ["./deploy/servers.json:/etc/coordinator/servers.json:ro"]
     depends_on:
       db: { condition: service_healthy }
 
@@ -100,22 +110,30 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 512m }
 
-  # Единственный сервис с доступом к Docker API: узкий набор операций, отдельный токен,
-  # порт наружу не публикуется. В api и dispatcher сокет не монтируется.
+  # Единственный сервис с доступом к Docker API и закрытому ключу SSH. Узкий набор операций,
+  # отдельный токен, порт наружу не публикуется. В api и dispatcher сокета и ключа нет.
   runner:
     image: coord/platform:dev
     command: ["uvicorn", "coordinator.runner.main:app", "--host", "0.0.0.0", "--port", "9000"]
     # Сокет Docker доступен только root.
     user: "0"
     environment: *app-env
-    secrets: [coord_runner_token]
+    secrets: [coord_runner_token, ssh_client_key]
     restart: unless-stopped
-    volumes: [/var/run/docker.sock:/var/run/docker.sock]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Запомненные ключи серверов.
+      - runner-state:/var/lib/runner
+      # Что ставить на серверы: настоящий агент и заглушка.
+      - ../Agent/agent:/bundles/real/agent:ro
+      - ./deploy/real-agent/agent.yaml:/bundles/real/agent.yaml:ro
+      - ./deploy/real-agent/run.sh:/bundles/real/run.sh:ro
+      - ./stub:/bundles/stub:ro
     depends_on:
       migrate: { condition: service_completed_successfully }
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 128m }
+        limits: { cpus: "0.5", memory: 256m }
 
   web:
     build: { context: web }
@@ -134,7 +152,7 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 256m }
 
-  # Кладёт только открытый сертификат CA в общий том: его монтируют все контейнеры агентов,
+  # Кладёт только открытый сертификат CA в общий том: его монтируют все серверы,
   # в том числе созданные runner-ом, у которых нет доступа к файлам хоста.
   tls-init:
     image: coord/platform:dev
@@ -144,45 +162,39 @@ services:
       - ./deploy/tls:/tls-src:ro
       - tls-ca:/certs
 
-  # Три контейнера-заглушки с разной мощностью заменяют разные серверы из ТЗ (таблица 2.1).
-  worker-01:
-    <<: *worker
+  # Управляемый тестовый сайт из Agent/tests: страницы 200, 403, 404, 429, 500 и файлы.
+  site:
+    image: python:3.13-slim
+    command: ["python", "-u", "/site/site.py"]
     environment:
-      <<: *worker-env
-      WORKER_NAME: worker-01
-      AGENT_TOKEN_FILE: /run/secrets/worker_01_token
-      WORKER_THREADS: "8"
-    secrets: [worker_01_token]
-    labels: { lab.worker: worker-01, lab.managed: "true" }
-    volumes: ["videos-01:/data/videos", "tls-ca:/certs:ro"]
+      PYTHONPATH: /support
+    volumes:
+      - ./deploy/real-agent:/site:ro
+      - ../Agent/tests/support:/support:ro
+    restart: unless-stopped
+
+  # Рабочие серверы с разной мощностью (таблица 2.1 плана). Имена и параметры входа
+  # в deploy/servers.json. Адреса в сети стенда совпадают с именами сервисов.
+  worker-01:
+    <<: *server
+    hostname: worker-01
+    volumes: ["videos-01:/data/videos", "ssh-keys-01:/etc/ssh/keys", "tls-ca:/certs:ro"]
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 512m }
 
   worker-02:
-    <<: *worker
-    environment:
-      <<: *worker-env
-      WORKER_NAME: worker-02
-      AGENT_TOKEN_FILE: /run/secrets/worker_02_token
-      WORKER_THREADS: "16"
-    secrets: [worker_02_token]
-    labels: { lab.worker: worker-02, lab.managed: "true" }
-    volumes: ["videos-02:/data/videos", "tls-ca:/certs:ro"]
+    <<: *server
+    hostname: worker-02
+    volumes: ["videos-02:/data/videos", "ssh-keys-02:/etc/ssh/keys", "tls-ca:/certs:ro"]
     deploy:
       resources:
         limits: { cpus: "2.0", memory: 1g }
 
   worker-03:
-    <<: *worker
-    environment:
-      <<: *worker-env
-      WORKER_NAME: worker-03
-      AGENT_TOKEN_FILE: /run/secrets/worker_03_token
-      WORKER_THREADS: "2"
-    secrets: [worker_03_token]
-    labels: { lab.worker: worker-03, lab.managed: "true" }
-    volumes: ["videos-03:/data/videos", "tls-ca:/certs:ro"]
+    <<: *server
+    hostname: worker-03
+    volumes: ["videos-03:/data/videos", "ssh-keys-03:/etc/ssh/keys", "tls-ca:/certs:ro"]
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 256m }
@@ -229,11 +241,9 @@ services:
 
 secrets:
   coord_admin_password: { file: ./secrets/coord_admin_password }
-  coord_agent_tokens: { file: ./secrets/coord_agent_tokens }
   coord_runner_token: { file: ./secrets/coord_runner_token }
-  worker_01_token: { file: ./secrets/worker_01_token }
-  worker_02_token: { file: ./secrets/worker_02_token }
-  worker_03_token: { file: ./secrets/worker_03_token }
+  ssh_client_key: { file: ./secrets/ssh_client_key }
+  ssh_client_key_pub: { file: ./secrets/ssh_client_key_pub }
 
 volumes:
   pgdata:
@@ -242,5 +252,9 @@ volumes:
   videos-01:
   videos-02:
   videos-03:
+  ssh-keys-01:
+  ssh-keys-02:
+  ssh-keys-03:
+  runner-state:
   tls-ca:
     name: coord-tls-ca

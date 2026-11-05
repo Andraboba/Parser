@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     # Куда стучатся агенты: через nginx и TLS, порт api наружу не открыт.
     agent_coordinator_url: str = "https://web"
     image_update_timeout: int = 45
+    # Серверы с агентами по SSH. Ключи только у runner-а, в настройках их имена.
+    ssh_key_dir: str = "/run/secrets"
+    ssh_pin_file: str = "/var/lib/runner/known_hosts.json"
+    ssh_bundles_dir: str = "/bundles"
+    ssh_allowed_hosts: str = "worker-*,lab-*"
+    ssh_server_image: str = "coord/ssh-server:dev"
+    server_sync_interval: float = 5.0
+    seed_servers_file: str = ""
+    # Какой агент ставить: real из каталога Agent/ или stub, эталонная заглушка.
+    agent_kind: str = "real"
+    agent_ca_file: str = "/certs/ca.crt"
+    # Адрес сайта для агента. По умолчанию пусто: сайт задаётся только явно.
+    agent_site_template: str = ""
     container_sync_interval: float = 5.0
     # Терминал: короткая сессия и автозавершение без активности (ТЗ, п. 11.4).
     terminal_idle_seconds: int = 300
@@ -68,3 +81,6 @@ class Settings(BaseSettings):
 
     def runner_image_patterns(self) -> list[str]:
         return [p.strip() for p in self.runner_images.split(",") if p.strip()]
+
+    def ssh_host_patterns(self) -> list[str]:
+        return [p.strip() for p in self.ssh_allowed_hosts.split(",") if p.strip()]

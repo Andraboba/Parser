@@ -2,9 +2,11 @@
 """Чек-лист раздела 16 плана «подключили агента — всё работает».
 
 Выполняется дважды: с заглушками и с настоящими агентами. Второй прогон не требует правок платформы.
+Какие агенты стоят на серверах, скрипт видит сам:
 
-    python scripts/acceptance.py            заглушки, стенд из compose.yaml
-    python scripts/acceptance.py --real     настоящие агенты, deploy/compose.real-agent.yaml
+    docker compose up -d --build                         настоящие агенты
+    COORD_AGENT_KIND=stub docker compose up -d --build   заглушки
+    python scripts/acceptance.py
 """
 import json
 import os
@@ -18,13 +20,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import chaos  # noqa: E402
 
-REAL = "--real" in sys.argv
-if REAL:
-    chaos.COMPOSE = "docker compose -f compose.yaml -f deploy/compose.real-agent.yaml".split()
-# Настоящие агенты ходят на тестовый сайт с задержками 429, диапазон меньше.
-TOTAL = 1200 if REAL else 60000
-CHUNK = 100 if REAL else 1000
-RANGE = f"[100,{99 + TOTAL}]" if REAL else f"[1,{TOTAL}]"
 NAMES = ("worker-01", "worker-02", "worker-03")
 
 passed = 0
@@ -65,10 +60,15 @@ def main() -> int:
     limits = {nodes[n]["cpu_limit"] for n in NAMES}
     assert len(set(threads.values())) == 3 and len(limits) == 3, (threads, limits)
     version = nodes["worker-01"]["agent_version"]
-    step(2, "Три контейнера агента с разными лимитами и потоками", f"агент {version}, {threads}")
+    assert all(nodes[n]["provisioning_mode"] == "ssh" for n in NAMES), "ожидаются серверы по SSH"
+    step(2, "Три сервера по SSH с разными лимитами и потоками", f"агент {version}, {threads}")
 
-    job_id = chaos.new_job(RANGE, CHUNK)
-    step(3, "Создано задание на конечном диапазоне, запущено", f"№ {job_id}, {RANGE}")
+    # Настоящие агенты ходят на тестовый сайт с задержками 429, поэтому диапазон меньше.
+    real = not version.startswith("stub")
+    total, chunk_size = (1200, 100) if real else (60000, 1000)
+    text = f"[100,{99 + total}]" if real else f"[1,{total}]"
+    job_id = chaos.new_job(text, chunk_size)
+    step(3, "Создано задание на конечном диапазоне, запущено", f"№ {job_id}, {text}")
 
     chaos.wait_for("прогресс растёт", lambda: chaos.job(job_id)["processed_ids"] > 0, 60)
     first = chaos.job(job_id)["processed_ids"]
@@ -88,22 +88,21 @@ def main() -> int:
     )
     chaos.compose("stop", "worker-02")
     chaos.wait_for("блок снят", lambda: chaos.workers()["worker-02"]["leased_chunks"] == 0, 60)
-    step(6, "Контейнер остановлен: его блок вернулся в очередь")
+    step(6, "Сервер остановлен: его блок вернулся в очередь")
 
     chaos.compose("start", "worker-02")
     chaos.wait_online("worker-02")
-    step(7, "Контейнер запущен снова и продолжает работу")
+    step(7, "Сервер запущен снова, координатор поднял агента по SSH")
 
     base = chaos.api("GET", "/api/rate-limit")["base_rps"]
-    if not REAL:
-        chaos.compose("exec", "-T", "worker-02", "sh", "-c",
-                      'echo \'{"rate_limited": true}\' > /tmp/stub-control.json')
+    if not real:
+        chaos.control("worker-02", '{"rate_limited": true}')
     chaos.wait_for("общий лимит снизился", lambda: (
         (chaos.api("GET", "/api/rate-limit")["effective_rps"] or base) < base
     ), 60)
     low = chaos.api("GET", "/api/rate-limit")["effective_rps"]
-    if not REAL:
-        chaos.compose("exec", "-T", "worker-02", "rm", "-f", "/tmp/stub-control.json")
+    if not real:
+        chaos.clear_control("worker-02")
     step(8, "Ответы 429: суммарная частота запросов снижается", f"{base} → {low} запросов/с")
 
     victim = chaos.workers()["worker-01"]["id"]
@@ -125,23 +124,24 @@ def main() -> int:
 
     body = chaos.finish(job_id, 480)
     assert body["status"] == "completed", body
-    assert body["processed_ids"] == TOTAL, body
-    assert sum(body["items"].values()) == TOTAL, body["items"]
+    assert body["processed_ids"] == total, body
+    assert sum(body["items"].values()) == total, body["items"]
     events = chaos.api("GET", f"/api/jobs/{job_id}/events?limit=500")
     assert {e["operation"] for e in events} >= {"chunk.lease", "chunk.complete"}, events[:3]
     report = chaos.OPENER.open(chaos.BASE + f"/api/jobs/{job_id}/items.csv", timeout=30).read()
-    assert report.count(b"\n") >= TOTAL, "экспорт неполный"
+    assert report.count(b"\n") >= total, "экспорт неполный"
     step(11, "Задание завершено, отчёт и журнал событий доступны",
          f"{dict(filter(lambda kv: kv[1], body['items'].items()))}")
 
     done = next(e for e in chaos.api("GET", f"/api/events?operation=chunk.complete&job_id={job_id}"
                                             f"&worker_id={victim}&result=done&limit=1"))
-    token = Path("secrets/worker_01_token").read_text().strip()
-    code = agent_post(f"/api/workers/{victim}/complete", token, {
+    issued = chaos.api("POST", "/api/agent-tokens", {"worker_name": "worker-01"})
+    code = agent_post(f"/api/workers/{victim}/complete", issued["token"], {
         "chunk_id": done["chunk_id"], "next_id": 1, "results": [],
     })
+    chaos.api("POST", f"/api/agent-tokens/{issued['id']}/revoke")
     assert code == 200, code
-    assert sum(chaos.job(job_id)["items"].values()) == TOTAL
+    assert sum(chaos.job(job_id)["items"].values()) == total
     step(12, "Повторная отправка того же результата не создаёт дубликата")
 
     print(f"Пройдено шагов: {passed} из 12", flush=True)

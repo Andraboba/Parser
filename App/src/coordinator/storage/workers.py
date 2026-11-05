@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy import insert as core_insert
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,9 +38,13 @@ async def register_worker(session: AsyncSession, reg: Registration) -> int:
     """
     values = {**reg.__dict__, "status": WorkerStatus.ONLINE, "last_heartbeat_at": func.now()}
     stmt = insert(Worker).values(values)
+    updates = {k: stmt.excluded[k] for k in values if k != "name"}
+    # Сервер завёл оператор, а агент о своём режиме не знает: регистрация режим не меняет.
+    updates["provisioning_mode"] = case(
+        (Worker.provisioning_mode == "ssh", "ssh"), else_=stmt.excluded.provisioning_mode,
+    )
     stmt = stmt.on_conflict_do_update(
-        index_elements=[Worker.name],
-        set_={k: stmt.excluded[k] for k in values if k != "name"},
+        index_elements=[Worker.name], set_=updates,
     ).returning(Worker.id)
     return (await session.execute(stmt)).scalar_one()
 

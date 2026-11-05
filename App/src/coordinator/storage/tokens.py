@@ -2,7 +2,7 @@
 import hashlib
 from datetime import timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +54,16 @@ async def revoke(session: AsyncSession, token_id: int) -> AgentToken | None:
     await session.commit()
     await session.refresh(row)
     return row
+
+
+async def replace_for_worker(session: AsyncSession, worker_name: str, token: str) -> None:
+    """Новый токен узла вместо всех прежних."""
+    await session.execute(
+        update(AgentToken)
+        .where(AgentToken.worker_name == worker_name, AgentToken.revoked_at.is_(None))
+        .values(revoked_at=func.now())
+    )
+    await upsert_token(session, worker_name, token)
 
 
 async def list_tokens(session: AsyncSession) -> list[AgentToken]:

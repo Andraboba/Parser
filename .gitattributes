@@ -1,0 +1,4 @@
+# На Windows git иначе заменит переводы строк, и скрипты перестанут запускаться в контейнерах.
+* text=auto eol=lf
+*.docx binary
+*.png binary

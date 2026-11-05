@@ -1,0 +1,61 @@
+# Другой режим: заглушка агента запускается прямо как контейнер, без SSH.
+#   docker compose -f compose.yaml -f deploy/compose.docker-mode.yaml up -d --build
+# Управление через Docker API: запуск, остановка, обновление образа с откатом (Э6 плана).
+x-docker-worker: &docker-worker
+  build: !override { context: stub }
+  image: coord/agent-stub:dev
+  entrypoint: !reset null
+  command: ["python", "agent_stub.py"]
+  depends_on: !override
+    web: { condition: service_healthy }
+    tls-init: { condition: service_completed_successfully }
+
+x-docker-env: &docker-env
+  COORD_URL: https://web
+  SSL_CERT_FILE: /certs/ca.crt
+  AGENT_IMAGE: coord/agent-stub:dev
+
+services:
+  migrate:
+    environment:
+      COORD_SEED_SERVERS_FILE: ""
+    secrets: !override [coord_admin_password, coord_agent_tokens]
+
+  worker-01:
+    <<: *docker-worker
+    environment:
+      <<: *docker-env
+      WORKER_NAME: worker-01
+      AGENT_TOKEN_FILE: /run/secrets/worker_01_token
+      WORKER_THREADS: "8"
+    secrets: !override [worker_01_token]
+    labels: { lab.worker: worker-01, lab.managed: "true" }
+    healthcheck: { disable: true }
+
+  worker-02:
+    <<: *docker-worker
+    environment:
+      <<: *docker-env
+      WORKER_NAME: worker-02
+      AGENT_TOKEN_FILE: /run/secrets/worker_02_token
+      WORKER_THREADS: "16"
+    secrets: !override [worker_02_token]
+    labels: { lab.worker: worker-02, lab.managed: "true" }
+    healthcheck: { disable: true }
+
+  worker-03:
+    <<: *docker-worker
+    environment:
+      <<: *docker-env
+      WORKER_NAME: worker-03
+      AGENT_TOKEN_FILE: /run/secrets/worker_03_token
+      WORKER_THREADS: "2"
+    secrets: !override [worker_03_token]
+    labels: { lab.worker: worker-03, lab.managed: "true" }
+    healthcheck: { disable: true }
+
+secrets:
+  coord_agent_tokens: { file: ./secrets/coord_agent_tokens }
+  worker_01_token: { file: ./secrets/worker_01_token }
+  worker_02_token: { file: ./secrets/worker_02_token }
+  worker_03_token: { file: ./secrets/worker_03_token }

@@ -306,6 +306,9 @@ class WorkerOut(BaseModel):
     ssh_host: str | None
     ssh_port: int | None
     ssh_user: str | None
+    ssh_key_ref: str | None
+    agent_kind: str | None
+    desired_agent_state: str | None
     registered_at: datetime
     last_heartbeat_at: datetime | None
     leased_chunks: int
@@ -327,7 +330,9 @@ class WorkerOut(BaseModel):
             free_slots=w.free_slots, lease_block_reason=w.lease_block_reason,
             agent_version=w.agent_version,
             protocol_version=w.protocol_version, last_ip=w.last_ip, ssh_host=w.ssh_host,
-            ssh_port=w.ssh_port, ssh_user=w.ssh_user, registered_at=w.registered_at,
+            ssh_port=w.ssh_port, ssh_user=w.ssh_user, ssh_key_ref=w.ssh_key_ref,
+            agent_kind=w.agent_kind, desired_agent_state=w.desired_agent_state,
+            registered_at=w.registered_at,
             last_heartbeat_at=w.last_heartbeat_at, leased_chunks=view.leased_chunks,
             current_chunks=view.current_chunks, metrics=w.metrics, counters=w.counters,
             container_state=w.container_state,

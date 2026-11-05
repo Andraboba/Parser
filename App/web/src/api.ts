@@ -51,6 +51,12 @@ export interface WorkerNode {
   min_free_space_gb: number | null;
   rps_limit: number | null;
   storage_path: string | null;
+  ssh_host: string | null;
+  ssh_port: number | null;
+  ssh_user: string | null;
+  ssh_key_ref: string | null;
+  agent_kind: string | null;
+  desired_agent_state: string | null;
   status: string;
   agent_state: string | null;
   free_slots: number | null;
@@ -72,6 +78,37 @@ export interface ContainerState {
   state: string;
   restart_count: number;
   oom_killed: boolean;
+  ssh?: string;
+  error?: string;
+}
+
+export type AgentAction = "start" | "stop" | "restart";
+
+export interface ServerCheck {
+  reachable: boolean;
+  installed: boolean;
+  running: boolean;
+  pid: number | null;
+  release: string | null;
+  python: string | null;
+  kernel: string | null;
+  error: string | null;
+  error_code: string | null;
+}
+
+export interface NewServer {
+  name: string;
+  host: string | null;
+  ssh_port: number;
+  ssh_user: string;
+  ssh_key: string;
+  threads: number;
+  storage_path: string;
+  min_free_space_gb: number | null;
+  agent_kind: string;
+  create_container: boolean;
+  cpus: number;
+  memory_mb: number;
 }
 
 export interface NewContainer {
@@ -207,6 +244,16 @@ function patch<T>(path: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload),
   });
 }
+
+export const createServer = (server: NewServer) => post<WorkerNode>("/servers", server);
+export const checkServer = (id: number) => post<ServerCheck>(`/workers/${id}/agent/check`);
+export const agentAction = (id: number, action: AgentAction) =>
+  post<WorkerNode>(`/workers/${id}/agent/${action}`);
+export const agentLogs = (id: number) =>
+  request<{ logs: string }>(`/workers/${id}/agent/logs?tail=200`);
+export const deployAgent = (id: number, kind: string) =>
+  post<WorkerNode>(`/workers/${id}/agent/deploy`, { agent_kind: kind });
+export const forgetHostKey = (id: number) => post<unknown>(`/workers/${id}/agent/forget-host-key`);
 
 export const containerAction = (id: number, action: "start" | "stop" | "restart") =>
   post<ContainerState>(`/workers/${id}/container/${action}`);

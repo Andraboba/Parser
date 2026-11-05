@@ -30,6 +30,14 @@ if [ ! -f secrets/coord_agent_tokens ]; then
     "worker-01=$(cat secrets/worker_01_token),worker-02=$(cat secrets/worker_02_token),worker-03=$(cat secrets/worker_03_token)"
 fi
 
+# Ключ, которым координатор входит на серверы. Закрытая часть только у runner-а.
+if [ ! -f secrets/ssh_client_key ]; then
+  ssh-keygen -q -t ed25519 -N "" -C coordinator -f secrets/ssh_client_key
+  mv secrets/ssh_client_key.pub secrets/ssh_client_key_pub
+  chmod 644 secrets/ssh_client_key secrets/ssh_client_key_pub
+  echo "создан ключ SSH secrets/ssh_client_key"
+fi
+
 [ -f .env ] || cp .env.example .env
 
 if [ "${1:-}" = "--renew-tls" ] || [ ! -f deploy/tls/server.crt ]; then

@@ -254,7 +254,7 @@ class TestWorkerApi:
         })
         body = card(client, worker)
         assert body["ssh_host"] == "192.168.10.11"
-        assert "ssh_key_ref" not in body
+        assert body["ssh_key_ref"] == "worker-01-key", "имя секрета, а не сам ключ"
 
     def test_metrics_series_is_chronological(self, client: TestClient) -> None:
         worker = register(client)

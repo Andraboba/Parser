@@ -66,6 +66,21 @@ class TokenNotFound(CoordinatorError):
     code = "token_not_found"
 
 
+class InvalidServer(CoordinatorError):
+    status = 409
+    code = "not_ssh_worker"
+
+
+class HostNotAllowed(CoordinatorError):
+    status = 422
+    code = "host_not_allowed"
+
+
+class ServerExists(CoordinatorError):
+    status = 409
+    code = "server_exists"
+
+
 class WorkerNotFound(CoordinatorError):
     status = 404
     code = "worker_not_found"

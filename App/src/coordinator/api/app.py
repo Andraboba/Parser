@@ -15,6 +15,7 @@ from coordinator.api import auth as auth_api
 from coordinator.api import containers as containers_api
 from coordinator.api import jobs as jobs_api
 from coordinator.api import monitoring as monitoring_api
+from coordinator.api import servers as servers_api
 from coordinator.api import system as system_api
 from coordinator.api import terminal as terminal_api
 from coordinator.api import tokens as tokens_api
@@ -50,6 +51,7 @@ def create_app(settings: Settings | None = None, runner: RunnerClient | None = N
     app.include_router(workers_api.agent_router)
     app.include_router(system_api.router)
     app.include_router(containers_api.router)
+    app.include_router(servers_api.router)
     app.include_router(auth_api.router)
     app.include_router(monitoring_api.router)
     app.include_router(tokens_api.router)

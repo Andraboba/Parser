@@ -1,22 +1,18 @@
 # Режим разработки без TLS: docker compose -f compose.yaml -f deploy/compose.dev.yaml up -d --build
 # Интерфейс: http://localhost:8080, API напрямую: http://localhost:8000. Не для настоящей работы:
 # пароли и токены идут открытым текстом.
-x-http-worker: &http-worker
-  COORD_URL: http://api:8000
-
 services:
   api:
     ports: ["8000:8000"]
     environment:
       COORD_COOKIE_SECURE: "false"
+      COORD_AGENT_COORDINATOR_URL: http://api:8000
+  # Агентов на серверах ставит и диспетчер, поэтому адрес нужен и ему.
+  dispatcher:
+    environment:
+      COORD_AGENT_COORDINATOR_URL: http://api:8000
   web:
     ports: !override ["8080:80"]
     volumes: !override ["./web/nginx-http.conf:/etc/nginx/conf.d/default.conf:ro"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
-  worker-01:
-    environment: *http-worker
-  worker-02:
-    environment: *http-worker
-  worker-03:
-    environment: *http-worker

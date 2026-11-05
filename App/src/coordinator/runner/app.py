@@ -8,15 +8,17 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from coordinator.config import Settings
 from coordinator.runner.docker import DockerClient, DockerError
 from coordinator.runner.service import Runner, RunnerError, WorkerSpec
+from coordinator.runner.ssh import SshFailure, SshManager, SshTarget
 
 log = logging.getLogger("coordinator.runner")
 
@@ -34,21 +36,58 @@ class UpdateImage(BaseModel):
     image: str = Field(max_length=255)
 
 
+class TargetIn(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    user: str = Field(pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
+    key_ref: str = Field(max_length=64)
+
+    def to_target(self) -> SshTarget:
+        return SshTarget(self.host, self.port, self.user, self.key_ref)
+
+
+class TargetBody(BaseModel):
+    target: TargetIn
+
+
+class LogsBody(TargetBody):
+    tail: int = Field(default=200, ge=1, le=5000)
+
+
+class DeployBody(TargetBody):
+    kind: str = Field(max_length=64)
+    env: dict[str, str] = {}
+
+
+class CreateServer(BaseModel):
+    name: str = Field(max_length=63)
+    cpus: float = Field(ge=0.1, le=64)
+    memory_mb: int = Field(ge=64, le=1024 * 1024)
+    key_ref: str = Field(max_length=64)
+
+
 class Finish(BaseModel):
     full_id: str | None = Field(default=None, max_length=128)
     previous_id: str = Field(max_length=128)
 
 
-def create_runner_app(settings: Settings, docker: DockerClient | None = None) -> FastAPI:
+def create_runner_app(
+    settings: Settings, docker: DockerClient | None = None, ssh: SshManager | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client = docker or DockerClient()
         app.state.runner = Runner(
             client, settings.runner_image_patterns(), settings.runner_network,
         )
+        app.state.ssh = ssh or SshManager(
+            Path(settings.ssh_key_dir), Path(settings.ssh_pin_file),
+            Path(settings.ssh_bundles_dir), settings.ssh_host_patterns(),
+        )
         try:
             yield
         finally:
+            await app.state.ssh.close()
             await client.aclose()
 
     def check_token(x_runner_token: Annotated[str, Header()] = "") -> None:
@@ -71,6 +110,18 @@ def create_runner_app(settings: Settings, docker: DockerClient | None = None) ->
     async def on_docker_error(_: Request, exc: DockerError) -> JSONResponse:
         log.warning("ошибка docker: %s %s", exc.status, exc)
         return JSONResponse(status_code=502, content={"detail": str(exc), "code": "docker_error"})
+
+    @app.exception_handler(SshFailure)
+    async def on_ssh_failure(_: Request, exc: SshFailure) -> JSONResponse:
+        log.warning("ssh: %s %s", exc.code, exc)
+        return JSONResponse(
+            status_code=exc.status, content={"detail": str(exc), "code": exc.code},
+        )
+
+    def ssh_of(request: Request) -> SshManager:
+        return request.app.state.ssh
+
+    SshDep = Annotated[SshManager, Depends(ssh_of)]
 
     def runner_of(request: Request) -> Runner:
         return request.app.state.runner
@@ -136,24 +187,61 @@ def create_runner_app(settings: Settings, docker: DockerClient | None = None) ->
         await runner.rollback_update(body.full_id, body.previous_id)
         log.warning("откат обновления, возвращён контейнер %s", body.previous_id[:12])
 
+    @http.post("/ssh/status")
+    async def ssh_status(body: TargetBody, manager: SshDep) -> dict[str, Any]:
+        return await manager.status(body.target.to_target())
+
+    @http.post("/ssh/start", status_code=204)
+    async def ssh_start(body: TargetBody, manager: SshDep) -> None:
+        await manager.start(body.target.to_target())
+        log.info("запущен агент на %s", body.target.host)
+
+    @http.post("/ssh/stop", status_code=204)
+    async def ssh_stop(body: TargetBody, manager: SshDep) -> None:
+        await manager.stop(body.target.to_target())
+        log.info("остановлен агент на %s", body.target.host)
+
+    @http.post("/ssh/restart", status_code=204)
+    async def ssh_restart(body: TargetBody, manager: SshDep) -> None:
+        await manager.restart(body.target.to_target())
+        log.info("перезапущен агент на %s", body.target.host)
+
+    @http.post("/ssh/rollback", status_code=204)
+    async def ssh_rollback(body: TargetBody, manager: SshDep) -> None:
+        await manager.rollback(body.target.to_target())
+        log.warning("откат агента на %s", body.target.host)
+
+    @http.post("/ssh/logs")
+    async def ssh_logs(body: LogsBody, manager: SshDep) -> dict[str, str]:
+        return {"logs": await manager.logs(body.target.to_target(), body.tail)}
+
+    @http.post("/ssh/deploy")
+    async def ssh_deploy(body: DeployBody, manager: SshDep) -> dict[str, str]:
+        result = await manager.deploy(body.target.to_target(), body.kind, body.env)
+        # Окружение содержит токен агента, в журнал идут только сервер и выпуск.
+        log.info("на %s установлен выпуск %s", body.target.host, result["release"])
+        return result
+
+    @http.post("/ssh/forget-host-key", status_code=204)
+    async def ssh_forget(body: TargetBody, manager: SshDep) -> None:
+        manager.forget_host_key(body.target.to_target())
+
+    @http.post("/ssh/servers", status_code=201)
+    async def ssh_create_server(
+        body: CreateServer, runner: RunnerDep, manager: SshDep,
+    ) -> dict[str, str]:
+        result = await runner.create_server(
+            body.name, settings.ssh_server_image, body.cpus, body.memory_mb,
+            manager.public_key(body.key_ref),
+        )
+        log.info("создан контейнер-сервер %s", body.name)
+        return result
+
     app.include_router(http)
 
-    @app.websocket("/containers/{worker}/terminal")
-    async def terminal(ws: WebSocket, worker: str) -> None:
-        """Мост между WebSocket и docker exec. Кому можно — решил api, здесь только токен."""
-        token = ws.headers.get("x-runner-token", "")
-        if not settings.runner_token or not hmac.compare_digest(token, settings.runner_token):
-            await ws.close(4401)
-            return
-        runner: Runner = ws.app.state.runner
-        try:
-            stream = await runner.open_terminal(worker)
-        except (RunnerError, DockerError) as exc:
-            log.warning("терминал не открыт: %s", exc)
-            await ws.close(4404)
-            return
-        await ws.accept()
-        log.info("открыт терминал узла %s", worker)
+    async def run_bridge(ws: WebSocket, stream: Any, name: str) -> None:
+        """Мост между WebSocket и потоком терминала. Соединение уже принято."""
+        log.info("открыт терминал %s", name)
 
         async def output() -> None:
             while chunk := await stream.read():
@@ -178,10 +266,45 @@ def create_runner_app(settings: Settings, docker: DockerClient | None = None) ->
             await asyncio.gather(*pending, return_exceptions=True)
         finally:
             await stream.close()
-            log.info("закрыт терминал узла %s", worker)
+            log.info("закрыт терминал %s", name)
         try:
             await ws.close()
         except RuntimeError:
             pass  # другая сторона уже закрыла соединение
+
+    @app.websocket("/ssh/terminal")
+    async def ssh_terminal(ws: WebSocket) -> None:
+        """Терминал сервера по SSH: куда подключаться, сообщает первым сообщением api."""
+        token = ws.headers.get("x-runner-token", "")
+        if not settings.runner_token or not hmac.compare_digest(token, settings.runner_token):
+            await ws.close(4401)
+            return
+        await ws.accept()
+        try:
+            target = TargetIn.model_validate_json(await ws.receive_text()).to_target()
+            stream = await ws.app.state.ssh.open_terminal(target)
+        except (SshFailure, ValidationError) as exc:
+            log.warning("терминал не открыт: %s", type(exc).__name__)
+            await ws.send_text(f"Терминал недоступен: {exc}"[:300])
+            await ws.close(4404)
+            return
+        await run_bridge(ws, stream, target.address)
+
+    @app.websocket("/containers/{worker}/terminal")
+    async def terminal(ws: WebSocket, worker: str) -> None:
+        """Мост между WebSocket и docker exec. Кому можно — решил api, здесь только токен."""
+        token = ws.headers.get("x-runner-token", "")
+        if not settings.runner_token or not hmac.compare_digest(token, settings.runner_token):
+            await ws.close(4401)
+            return
+        runner: Runner = ws.app.state.runner
+        try:
+            stream = await runner.open_terminal(worker)
+        except (RunnerError, DockerError) as exc:
+            log.warning("терминал не открыт: %s", exc)
+            await ws.close(4404)
+            return
+        await ws.accept()
+        await run_bridge(ws, stream, worker)
 
     return app

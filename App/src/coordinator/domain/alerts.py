@@ -67,7 +67,11 @@ def worker_alerts(
 
     if not worker.enabled:
         return found
-    if worker.container_state in ("exited", "dead", "missing", "created"):
+    if worker.container_state == "unreachable":
+        add("worker_unavailable", "critical", "сервер недоступен по SSH")
+    elif worker.container_state in ("stopped", "not_installed"):
+        add("worker_unavailable", "critical", "агент на сервере не работает")
+    elif worker.container_state in ("exited", "dead", "missing", "created"):
         add("worker_unavailable", "critical", f"контейнер в состоянии {worker.container_state}")
     elif not worker.online:
         add("worker_unavailable", "critical", "узел недоступен")

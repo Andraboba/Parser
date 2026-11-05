@@ -47,9 +47,11 @@ erDiagram
   уже обработанного диапазона, поэтому прогресс задания считается только по нулевому проходу.
 - `range_chunks.leased_by` после возврата блока в очередь сохраняет последнего владельца: поздний
   `complete` от него будет принят, если блок никому не передан.
-- `workers.provisioning_mode` и поля `ssh_*` нужны для режима настоящих машин (ТЗ, п. 4). В
-  `ssh_key_ref` хранится имя секрета, а не сам ключ. Запуск агента по SSH не реализован: см.
-  [ограничения](limitations.md).
+- `workers.provisioning_mode`: `ssh` или `docker`. Для `ssh` заполнены поля `ssh_*`, причём в
+  `ssh_key_ref` хранится имя секрета, а не сам ключ. `agent_kind` — что ставить на сервер (`real` или
+  `stub`), `desired_agent_state` — в каком состоянии должен быть агент (`running` или `stopped`).
+- `workers.container_state` для `ssh`-узла: `state` (`running`, `stopped`, `starting`, `not_installed`,
+  `unreachable`), `ssh`, `python`, `kernel`, `restart_count`, `error`, в `image` — выпуск агента, в `id` — pid.
 
 ## Миграции
 

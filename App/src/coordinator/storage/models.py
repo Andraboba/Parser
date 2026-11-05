@@ -57,6 +57,9 @@ class Worker(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     min_free_space_gb: Mapped[float | None] = mapped_column(Float)
     rps_limit: Mapped[float | None] = mapped_column(Float)
+    # Какой агент ставить и должен ли он работать: диспетчер приводит сервер к этому состоянию.
+    agent_kind: Mapped[str | None] = mapped_column(String(16))
+    desired_agent_state: Mapped[str | None] = mapped_column(String(16))
     # Поля режима provisioning_mode=ssh. Сам ключ хранится в менеджере секретов.
     ssh_host: Mapped[str | None] = mapped_column(String(255))
     ssh_port: Mapped[int | None] = mapped_column(Integer)

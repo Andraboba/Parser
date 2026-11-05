@@ -2,9 +2,11 @@
 import asyncio
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import asyncssh
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +17,7 @@ from coordinator.dispatcher.ticks import sync_containers
 from coordinator.runner.app import create_runner_app
 from coordinator.runner.docker import DockerClient, demux_logs
 from coordinator.runner.service import filter_env, image_allowed
+from coordinator.runner.ssh import SshManager
 from coordinator.runner_client import RunnerClient
 from coordinator.storage import db
 from tests.conftest import FLEET_TOKEN, login
@@ -497,3 +500,62 @@ class TestStateSync:
         card = client.get(f"/api/workers/{worker}").json()
         assert card["status"] == "online"
         assert card["container_state"] is None
+
+
+class TestSshRoutes:
+    @pytest.mark.parametrize("path", [
+        "/ssh/status", "/ssh/start", "/ssh/stop", "/ssh/restart", "/ssh/rollback", "/ssh/logs",
+        "/ssh/deploy", "/ssh/forget-host-key", "/ssh/servers",
+    ])
+    def test_every_route_requires_token(self, runner_app: Any, path: str) -> None:
+        with TestClient(runner_app, headers={"X-Runner-Token": "wrong"}) as client:
+            assert client.post(path, json={}).status_code == 401
+
+
+class TestServerContainer:
+    """Контейнер, который изображает сервер: в нём нет ни сокета Docker, ни закрытого ключа."""
+
+    @pytest.fixture
+    def servers(self, fake: FakeDocker, tmp_path: Path) -> Iterator[TestClient]:
+        key = asyncssh.generate_private_key("ssh-ed25519")
+        key.write_private_key(str(tmp_path / "ssh_client_key"))
+        manager = SshManager(tmp_path, tmp_path / "pins.json", tmp_path, ["lab-*"])
+        app = create_runner_app(
+            Settings(runner_token=TOKEN), DockerClient(httpx.MockTransport(fake.handle)), manager,
+        )
+        with TestClient(app, headers={"X-Runner-Token": TOKEN}) as client:
+            yield client
+
+    def create(self, client: TestClient, **fields: Any) -> httpx.Response:
+        body = {"name": "worker-04", "cpus": 0.5, "memory_mb": 256, "key_ref": "ssh_client_key"}
+        return client.post("/ssh/servers", json=body | fields)
+
+    def test_created_and_started_without_secrets(
+        self, servers: TestClient, fake: FakeDocker,
+    ) -> None:
+        response = self.create(servers)
+        assert response.status_code == 201
+        assert response.json()["host"] == "lab-worker-04"
+        container = next(iter(fake.containers.values()))
+        assert container["State"] == "running"
+        config = container["Config"]
+        host = config["HostConfig"]
+        assert host["Privileged"] is False
+        assert host["Init"] is True
+        assert host["NanoCpus"] == 500_000_000
+        assert host["Memory"] == 256 * 1024**2
+        assert not any("docker.sock" in bind for bind in host["Binds"])
+        env = " ".join(config["Env"])
+        assert "SSH_AUTHORIZED_KEY=ssh-ed25519 " in env
+        assert "PRIVATE KEY" not in json.dumps(config)
+
+    def test_second_server_with_same_name_is_refused(self, servers: TestClient) -> None:
+        assert self.create(servers).status_code == 201
+        assert self.create(servers).status_code == 409
+
+    def test_bad_name_and_unknown_key_are_refused(
+        self, servers: TestClient, fake: FakeDocker,
+    ) -> None:
+        assert self.create(servers, name="../evil").status_code == 422
+        assert self.create(servers, key_ref="no_such_key").status_code == 422
+        assert not fake.containers

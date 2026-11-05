@@ -469,6 +469,25 @@ details.card summary {
   pointer-events: none;
 }
 
+.checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+
+.checkbox-label input {
+  width: auto;
+}
+
+.server-admin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
 .section-title {
   margin-top: 28px;
   font-size: 20px;

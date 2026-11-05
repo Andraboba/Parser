@@ -21,6 +21,7 @@ import logging
 import os
 import shutil
 import signal
+import socket
 import sys
 import threading
 import time
@@ -150,7 +151,7 @@ class StubAgent:
         _, data = self._post("/api/workers/register", {
             "name": self.name,
             "provisioning_mode": "docker",
-            "container_id": os.environ.get("HOSTNAME"),
+            "container_id": os.environ.get("HOSTNAME") or socket.gethostname(),
             "image": os.environ.get("AGENT_IMAGE"),
             "agent_version": AGENT_VERSION,
             "protocol_version": PROTOCOL_VERSION,

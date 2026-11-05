@@ -6,6 +6,7 @@ import asyncio
 import logging
 import signal
 import time
+from typing import Any
 
 from sqlalchemy.exc import DBAPIError
 
@@ -18,6 +19,7 @@ from coordinator.dispatcher.ticks import (
 )
 from coordinator.errors import CoordinatorError
 from coordinator.logging_setup import setup_logging
+from coordinator.provisioning import reconcile_servers
 from coordinator.runner_client import RunnerClient
 from coordinator.storage import cache, db, monitoring
 
@@ -25,6 +27,23 @@ log = logging.getLogger("coordinator.dispatcher")
 
 _PURGE_INTERVAL_S = 3600.0
 _MAX_BACKOFF_S = 30.0
+
+
+async def _server_loop(
+    settings: Settings, sessions: Any, runner: RunnerClient, stop: asyncio.Event,
+) -> None:
+    """Отдельно от таймеров: медленный SSH не должен задерживать возврат блоков."""
+    while not stop.is_set():
+        try:
+            async with sessions() as session:
+                await reconcile_servers(session, runner, settings)
+        except (DBAPIError, OSError, CoordinatorError) as exc:
+            log.warning("сверка серверов не удалась: %s", type(exc).__name__)
+        try:
+            async with asyncio.timeout(settings.server_sync_interval):
+                await stop.wait()
+        except TimeoutError:
+            pass
 
 
 async def run(settings: Settings, stop: asyncio.Event) -> None:
@@ -37,6 +56,10 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
     last_sync = 0.0
     last_sample = 0.0
     needs_amnesty = True
+    servers = (
+        asyncio.create_task(_server_loop(settings, sessions, runner, stop))
+        if runner.configured else None
+    )
     try:
         while not stop.is_set():
             try:
@@ -74,6 +97,9 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
             except TimeoutError:
                 pass
     finally:
+        if servers is not None:
+            servers.cancel()
+            await asyncio.gather(servers, return_exceptions=True)
         await runner.aclose()
         await redis.aclose()
         await engine.dispose()

@@ -14,6 +14,7 @@ from coordinator.config import Settings
 from coordinator.domain.security import Role, mask_secrets, role_allows
 from coordinator.domain.terminal import CommandLine
 from coordinator.errors import CoordinatorError
+from coordinator.provisioning import SSH_MODE, target_of
 from coordinator.storage import users
 from coordinator.storage.models import Worker
 
@@ -122,7 +123,11 @@ async def terminal(ws: WebSocket, worker_id: int) -> None:
     await _audit(ws, user.login, "terminal.open", target, "accepted")
     reason = "error"
     try:
-        async with state.runner.terminal(worker.name) as backend:
+        opener = (
+            state.runner.ssh_terminal(target_of(worker))
+            if worker.provisioning_mode == SSH_MODE else state.runner.terminal(worker.name)
+        )
+        async with opener as backend:
             output = asyncio.create_task(_to_user(backend, ws))
             source = asyncio.create_task(_from_user(ws, backend, user.login, target, settings))
             done, pending = await asyncio.wait(

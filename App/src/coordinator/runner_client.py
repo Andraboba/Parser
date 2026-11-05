@@ -1,4 +1,5 @@
 """Клиент runner-а для api и dispatcher. Сокета Docker у них нет: только этот узкий HTTP-API."""
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -48,6 +49,22 @@ class RunnerClient:
                 f"{url}/containers/{worker}/terminal", max_size=None,
                 additional_headers={"X-Runner-Token": self._token},
             ) as connection:
+                yield connection
+        except (OSError, InvalidHandshake, ConnectionClosedError) as exc:
+            raise RunnerUnavailable(f"терминал недоступен: {type(exc).__name__}") from exc
+
+    @asynccontextmanager
+    async def ssh_terminal(self, target: dict[str, Any]) -> AsyncIterator[Any]:
+        """То же для сервера по SSH: сначала runner получает, куда подключаться."""
+        if not self.configured:
+            raise RunnerUnavailable("runner не настроен: контейнеры управляются через compose")
+        url = self._base_url.replace("http", "ws", 1).rstrip("/")
+        try:
+            async with connect(
+                f"{url}/ssh/terminal", max_size=None,
+                additional_headers={"X-Runner-Token": self._token},
+            ) as connection:
+                await connection.send(json.dumps(target))
                 yield connection
         except (OSError, InvalidHandshake, ConnectionClosedError) as exc:
             raise RunnerUnavailable(f"терминал недоступен: {type(exc).__name__}") from exc

@@ -136,6 +136,11 @@ class FakeRunner(RunnerClient):
         self.opened.append(worker)
         yield self.backend
 
+    @contextlib.asynccontextmanager
+    async def ssh_terminal(self, target: dict[str, Any]) -> AsyncIterator[FakeBackend]:
+        self.opened.append(f"ssh:{target['user']}@{target['host']}:{target['port']}")
+        yield self.backend
+
 
 @pytest.fixture
 def runner() -> FakeRunner:
@@ -192,6 +197,22 @@ class TestTerminalAccess:
             assert ws.receive_bytes() == b"ls\r"
         assert runner.opened == ["worker-01"]
         assert b"ls\r" in runner.backend.sent
+
+    def test_ssh_worker_gets_terminal_over_ssh_with_same_policy(
+        self, admin: TestClient, runner: FakeRunner,
+    ) -> None:
+        worker = register(admin)
+        sql(
+            "UPDATE workers SET provisioning_mode = 'ssh', ssh_host = 'worker-01', ssh_port = 22, "
+            "ssh_user = 'agent', ssh_key_ref = 'ssh_client_key' WHERE id = :id", id=worker,
+        )
+        with connect(admin, worker) as ws:
+            assert ws.receive_bytes() == b"$ "
+            ws.send_bytes(b"rm -rf /\r")
+            assert "запрещена политикой" in ws.receive_text()
+        assert runner.opened == ["ssh:agent@worker-01:22"]
+        assert b"rm -rf /\r" not in runner.backend.sent
+        assert ("terminal.denied", f"worker_id={worker}", "rm -rf /") in audit_rows_after_close()
 
     def test_session_and_commands_are_audited(self, admin: TestClient) -> None:
         worker = register(admin)
@@ -347,6 +368,42 @@ class TestRunnerTerminal:
             ):
                 pass
         assert caught.value.code == CLOSE_UNAUTHORIZED
+
+    def test_ssh_terminal_requires_token(self, app: Any) -> None:
+        with TestClient(app) as client:
+            with pytest.raises(WebSocketDisconnect) as caught, client.websocket_connect(
+                "/ssh/terminal", headers={"X-Runner-Token": "wrong"},
+            ):
+                pass
+        assert caught.value.code == CLOSE_UNAUTHORIZED
+
+    def test_ssh_terminal_connects_where_it_was_told(self, app: Any, stream: FakeStream) -> None:
+        opened: list[Any] = []
+
+        async def open_terminal(target: Any) -> FakeStream:
+            opened.append(target)
+            return stream
+
+        with TestClient(app) as client:
+            app.state.ssh.open_terminal = open_terminal
+            with client.websocket_connect(
+                "/ssh/terminal", headers={"X-Runner-Token": "secret"},
+            ) as ws:
+                ws.send_text(json.dumps({
+                    "host": "worker-01", "port": 22, "user": "agent", "key_ref": "ssh_client_key",
+                }))
+                assert ws.receive_bytes() == b"prompt$ "
+        assert opened[0].address == "worker-01:22"
+        assert stream.closed
+
+    def test_ssh_terminal_rejects_bad_target(self, app: Any) -> None:
+        with TestClient(app) as client, client.websocket_connect(
+            "/ssh/terminal", headers={"X-Runner-Token": "secret"},
+        ) as ws:
+            ws.send_text('{"host": "worker-01; rm -rf /"}')
+            assert "недоступен" in ws.receive_text()
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_bytes()
 
     def test_bridges_output_input_and_resize(self, app: Any, stream: FakeStream) -> None:
         with TestClient(app) as client, client.websocket_connect(
