@@ -6,7 +6,8 @@
 
 ## Быстрый старт
 
-Нужны Docker с Compose и Git Bash или обычный bash (для генерации секретов).
+Запуск с нуля на новом устройстве, требования и решение проблем описаны в
+[README в корне репозитория](../README.md). Коротко, из этого каталога:
 
 ```bash
 bash scripts/init-env.sh
@@ -33,11 +34,12 @@ docker compose up -d --build
 | `src/coordinator/storage` | Модели и работа с базой, Redis |
 | `src/coordinator/dispatcher` | Выдача и закрытие блоков, таймеры диспетчера |
 | `src/coordinator/api` | HTTP API и шлюз терминала |
-| `src/coordinator/runner` | Единственный сервис с доступом к Docker API |
+| `src/coordinator/runner` | Единственный сервис с доступом к Docker API и закрытому ключу SSH |
+| `src/coordinator/provisioning.py` | Установка агентов и сверка серверов с желаемым состоянием |
 | `stub` | Эталонная заглушка агента |
 | `web` | Интерфейс на React, nginx |
 | `migrations` | Миграции Alembic |
-| `deploy` | Dockerfile, Prometheus, Grafana, режимы compose |
+| `deploy` | Dockerfile, образ сервера с SSH, список серверов, Prometheus, Grafana, режимы compose |
 | `scripts` | CI, сценарии отказов, нагрузочный тест, чек-лист приёмки |
 | `docs` | Документация |
 

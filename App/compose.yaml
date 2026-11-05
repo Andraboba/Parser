@@ -138,7 +138,7 @@ services:
   web:
     build: { context: web }
     image: coord/web:dev
-    ports: ["8443:443", "8080:80"]
+    ports: ["${COORD_HTTPS_PORT:-8443}:443", "${COORD_HTTP_PORT:-8080}:80"]
     volumes: ["./deploy/tls:/etc/nginx/tls:ro"]
     restart: unless-stopped
     depends_on:

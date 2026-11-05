@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """Сборка двух планов реализации по ТЗ лабораторной работы (редакция под докер-стенд)."""
 
+from pathlib import Path
+
 from docbuilder import Doc
 
-OUT1 = r"C:\Ushastiy\ПЛАН_1_Агент.docx"
-OUT2 = r"C:\Ushastiy\ПЛАН_2_Платформа.docx"
+ROOT = Path(__file__).resolve().parent
+OUT1 = str(ROOT / "ПЛАН_1_Агент.docx")
+OUT2 = str(ROOT / "ПЛАН_2_Платформа.docx")
 
 
 # --------------------------------------------------------------------------

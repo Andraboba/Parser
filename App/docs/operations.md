@@ -2,7 +2,8 @@
 
 ## Установка на чистую машину
 
-Требуются Docker с Compose v2, bash и openssl. На Windows подойдёт Git Bash. Минимум для стенда:
+Требуются Docker с Compose 2.24.4 и новее, git, bash, openssl и ssh-keygen. На Windows всё, кроме
+Docker, входит в Git for Windows, команды выполняйте в Git Bash. Минимум для стенда:
 4 vCPU и 8 ГБ памяти.
 
 ```bash
