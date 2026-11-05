@@ -26,3 +26,16 @@ def split_range(range_from: int, range_to: int, chunk_size: int) -> list[ChunkBo
         ChunkBounds(start, min(start + chunk_size - 1, range_to))
         for start in range(range_from, range_to + 1, chunk_size)
     ]
+
+
+def next_batch(cursor: int, end: int | None, chunk_size: int, count: int) -> list[ChunkBounds]:
+    """Следующие count блоков от cursor. Блоки создаются по мере работы: диапазон
+    может быть огромным или открытым, и заранее его нарезать нельзя (ТЗ, п. 6.1 и 10)."""
+    if end is not None and cursor > end:
+        return []
+    last = cursor + chunk_size * count - 1
+    return split_range(cursor, last if end is None else min(last, end), chunk_size)
+
+
+def chunks_needed(total_ids: int, chunk_size: int) -> int:
+    return (total_ids + chunk_size - 1) // chunk_size

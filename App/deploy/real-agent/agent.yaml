@@ -1,0 +1,42 @@
+# Настоящий агент на стенде с управляемым тестовым сайтом.
+# Отличие от конфига из Agent/: потоки ограничены только AGENT_THREADS, как в ТЗ (8, 16 и 2).
+agent:
+  name: worker
+  threads: 4
+  storage_path: /data/videos
+  state_dir: /data/videos/.agent
+  min_free_space_gb: 1
+  log_level: INFO
+  log_json: true
+
+coordinator:
+  base_url: https://web
+  token: ${AGENT_TOKEN}
+  heartbeat_interval: 5
+  lease_ttl: 60
+  poll_interval: 2
+
+limits:
+  rps: 200
+  max_connections: 32
+  check_concurrency: 16
+  download_concurrency: 4
+
+retry:
+  max_retries: 4
+  base_delay: 1.0
+  max_delay: 30
+  jitter: 0.3
+
+site_adapter:
+  page_url_template: "http://site:8081/page/{id}"
+  request_timeout_seconds: 20
+  user_agent: "lab-agent/1.0 (educational project)"
+  follow_redirects: false
+  allowed_redirect_hosts: []
+  missing_markers:
+    - "страница не найдена"
+    - "not found"
+  download:
+    policy: public_only
+    max_file_size_bytes: 104857600

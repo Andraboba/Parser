@@ -1,0 +1,78 @@
+{
+  "title": "Координатор",
+  "uid": "coordinator",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "title": "Узлов в сети", "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "coord_workers_online" }]
+    },
+    {
+      "id": 2, "title": "Активные предупреждения", "type": "stat",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "count(coord_alerts) or vector(0)" }]
+    },
+    {
+      "id": 3, "title": "Возраст старейшего блока, с", "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "coord_oldest_pending_seconds" }]
+    },
+    {
+      "id": 4, "title": "Загружено байт", "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [{ "expr": "coord_bytes_downloaded" }]
+    },
+    {
+      "id": 5, "title": "Скорость заданий, идентификаторов в секунду", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [{ "expr": "coord_job_ids_per_second", "legendFormat": "задание {{job}}" }]
+    },
+    {
+      "id": 6, "title": "Общий лимит запросов", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "coord_rate_limit_effective_rps", "legendFormat": "текущий" },
+        { "expr": "coord_rate_limit_base_rps", "legendFormat": "базовый" }
+      ]
+    },
+    {
+      "id": 7, "title": "CPU относительно лимита", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [{ "expr": "coord_worker_cpu_cores / coord_worker_cpu_limit", "legendFormat": "{{worker}}" }]
+    },
+    {
+      "id": 8, "title": "Память относительно лимита", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [{ "expr": "coord_worker_memory_bytes / coord_worker_memory_limit_bytes", "legendFormat": "{{worker}}" }]
+    },
+    {
+      "id": 9, "title": "Ошибки и ответы 429 за минуту", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "coord_worker_recent_failed", "legendFormat": "ошибки {{worker}}" },
+        { "expr": "coord_worker_recent_rate_limited", "legendFormat": "429 {{worker}}" }
+      ]
+    },
+    {
+      "id": 10, "title": "Блоки по статусам", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "targets": [{ "expr": "coord_chunks", "legendFormat": "{{status}}" }]
+    },
+    {
+      "id": 11, "title": "Heartbeat, возраст в секундах", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 28, "w": 12, "h": 8 },
+      "targets": [{ "expr": "coord_worker_heartbeat_age_seconds", "legendFormat": "{{worker}}" }]
+    },
+    {
+      "id": 12, "title": "Предупреждения", "type": "table",
+      "gridPos": { "x": 12, "y": 28, "w": 12, "h": 8 },
+      "targets": [{ "expr": "coord_alerts", "format": "table", "instant": true }]
+    }
+  ]
+}

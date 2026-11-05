@@ -1,0 +1,63 @@
+# Предупреждения из ТЗ, п. 12. Те же правила считает и сам координатор (/api/alerts):
+# интерфейс показывает их без Prometheus, а здесь они для дашборда и истории.
+groups:
+  - name: coordinator
+    rules:
+      - alert: WorkerUnavailable
+        expr: coord_worker_up == 0
+        labels: { severity: critical }
+        annotations: { summary: "Узел {{ $labels.worker }} недоступен" }
+      - alert: HeartbeatMissing
+        expr: coord_worker_heartbeat_age_seconds > 11
+        labels: { severity: critical }
+        annotations: { summary: "Узел {{ $labels.worker }} перестал отправлять heartbeat" }
+      - alert: DiskLow
+        expr: coord_worker_disk_free_bytes < coord_worker_min_free_bytes
+        labels: { severity: critical }
+        annotations: { summary: "На узле {{ $labels.worker }} свободное место ниже порога" }
+      - alert: CpuHigh
+        expr: coord_worker_cpu_cores > coord_worker_cpu_limit * 0.9
+        for: 30s
+        labels: { severity: warning }
+        annotations: { summary: "Высокая загрузка CPU на узле {{ $labels.worker }}" }
+      - alert: MemoryHigh
+        expr: coord_worker_memory_bytes > coord_worker_memory_limit_bytes * 0.9
+        for: 30s
+        labels: { severity: warning }
+        annotations: { summary: "Высокая загрузка памяти на узле {{ $labels.worker }}" }
+      - alert: ErrorsRising
+        expr: >-
+          coord_worker_recent_failed > coord_worker_recent_checked * 0.3
+          and coord_worker_recent_checked >= 20
+        labels: { severity: warning }
+        annotations: { summary: "Рост числа ошибок на узле {{ $labels.worker }}" }
+      - alert: ManyRateLimited
+        expr: coord_worker_recent_rate_limited >= 10
+        labels: { severity: warning }
+        annotations: { summary: "Много ответов 429 на узле {{ $labels.worker }}" }
+      - alert: RateLimitLowered
+        expr: coord_rate_limit_effective_rps < coord_rate_limit_base_rps * 0.5
+        for: 30s
+        labels: { severity: warning }
+        annotations: { summary: "Общий лимит запросов снижен из-за 429 и 5xx" }
+      - alert: JobStalled
+        expr: coord_job_seconds_since_progress > coord_alert_stall_threshold_seconds
+        labels: { severity: critical }
+        annotations: { summary: "Задание {{ $labels.job }} не продвигается" }
+      - alert: SpeedDropped
+        expr: coord_job_ids_per_second < coord_job_average_ids_per_second * 0.3
+        for: 1m
+        labels: { severity: warning }
+        annotations: { summary: "Резко снизилась скорость задания {{ $labels.job }}" }
+      - alert: VersionMismatch
+        expr: coord_alerts{code="version_mismatch"} == 1
+        labels: { severity: warning }
+        annotations: { summary: "Версия агента не соответствует координатору" }
+      - alert: ContainerRestarts
+        expr: coord_worker_container_restarts >= 3
+        labels: { severity: warning }
+        annotations: { summary: "Частые перезапуски контейнера {{ $labels.worker }}" }
+      - alert: OomKilled
+        expr: coord_worker_oom_killed == 1
+        labels: { severity: critical }
+        annotations: { summary: "Контейнер {{ $labels.worker }} убит из-за нехватки памяти" }

@@ -127,6 +127,7 @@ class AgentRuntime:
         self._stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
         self._current_chunk: Chunk | None = None
+        self._cancelled_chunks: set[int] = set()
         self._worker_id: str | None = None
         self._download_slots = threading.BoundedSemaphore(max(1, config.limits.download_concurrency))
 
@@ -289,6 +290,7 @@ class AgentRuntime:
                 while (
                     not expired
                     and not self._stop.is_set()
+                    and chunk.chunk_id not in self._cancelled_chunks
                     and len(inflight) < window
                     and submitted <= chunk.range_end
                 ):
@@ -367,6 +369,7 @@ class AgentRuntime:
         self.counters.failed += counters.failed
         self.counters.bytes_downloaded += counters.bytes_downloaded
         self._current_chunk = None
+        self._cancelled_chunks.discard(chunk.chunk_id)
         self.state.clear()
 
     # ------------------------------------------------------------------
@@ -464,9 +467,22 @@ class AgentRuntime:
             "counters": self.counters.to_dict(),
         }
         try:
-            self.client.heartbeat(self._worker_id, payload)
+            answer = self.client.heartbeat(self._worker_id, payload)
         except CoordinatorError as exc:
             _log.warning("heartbeat не доставлен", extra={"error": str(exc)})
+            return
+        self._apply_instructions(answer)
+
+    def _apply_instructions(self, answer: dict[str, Any]) -> None:
+        """Указания координатора: доля общего лимита, число потоков и отмена блока."""
+        share = answer.get("rps_share")
+        if share:
+            self.limiter.bucket.set_rate(max(0.1, float(share)))
+        threads = answer.get("threads")
+        if threads:
+            # Пул создаётся на блок: новое значение начнёт действовать со следующего блока.
+            self.concurrency = max(1, min(int(threads), self.config.limits.check_concurrency))
+        self._cancelled_chunks.update(answer.get("cancel_chunks") or [])
 
     def _shutdown(self) -> None:
         self._stop.set()

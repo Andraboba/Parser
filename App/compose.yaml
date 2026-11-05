@@ -1,9 +1,28 @@
-# Стенд одной командой: docker compose up -d --build
+# Стенд одной командой: scripts/init-env.sh && docker compose up -d --build
+# Интерфейс и API: https://localhost:8443, сертификат подписан CA из deploy/tls/ca.crt.
 name: coord
 
 x-app-env: &app-env
   COORD_DATABASE_URL: postgresql+psycopg://coord:coord@db:5432/coord
   COORD_REDIS_URL: redis://redis:6379/0
+  # На стенде с заглушками лимит высокий, для настоящего сайта задайте его в .env (ТЗ: 20).
+  COORD_GLOBAL_RPS_LIMIT: ${COORD_GLOBAL_RPS_LIMIT:-3000}
+  COORD_RUNNER_URL: http://runner:9000
+  COORD_COOKIE_SECURE: "true"
+
+x-worker: &worker
+  build: { context: stub }
+  image: coord/agent-stub:dev
+  restart: unless-stopped
+  depends_on:
+    web: { condition: service_healthy }
+    tls-init: { condition: service_completed_successfully }
+
+x-worker-env: &worker-env
+  COORD_URL: https://web
+  # Проверка сертификата координатора: urllib читает эту переменную.
+  SSL_CERT_FILE: /certs/ca.crt
+  AGENT_IMAGE: coord/agent-stub:dev
 
 services:
   db:
@@ -12,7 +31,6 @@ services:
       POSTGRES_USER: coord
       POSTGRES_PASSWORD: coord
       POSTGRES_DB: coord
-    ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U coord -d coord"]
@@ -25,7 +43,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -38,15 +55,27 @@ services:
   migrate:
     build: { context: ., dockerfile: deploy/Dockerfile, target: runtime }
     image: coord/platform:dev
-    command: ["alembic", "upgrade", "head"]
+    command: ["sh", "-c", "alembic upgrade head && python -m coordinator.bootstrap"]
     environment: *app-env
+    secrets: [coord_admin_password, coord_agent_tokens]
     depends_on:
       db: { condition: service_healthy }
 
   api:
     image: coord/platform:dev
+    # Процессов и CPU больше — запас по числу агентов, см. docs/load-report.md.
+    command:
+      - uvicorn
+      - coordinator.api.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+      - --no-access-log
+      - --workers=${COORD_API_WORKERS:-1}
     environment: *app-env
-    ports: ["8000:8000"]
+    secrets: [coord_runner_token]
+    restart: unless-stopped
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -57,7 +86,135 @@ services:
       retries: 10
     deploy:
       resources:
-        limits: { cpus: "1.0", memory: 1g }
+        limits: { cpus: "${COORD_API_CPUS:-1.0}", memory: 1g }
+
+  dispatcher:
+    image: coord/platform:dev
+    command: ["python", "-m", "coordinator.dispatcher.main"]
+    environment: *app-env
+    secrets: [coord_runner_token]
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
+
+  # Единственный сервис с доступом к Docker API: узкий набор операций, отдельный токен,
+  # порт наружу не публикуется. В api и dispatcher сокет не монтируется.
+  runner:
+    image: coord/platform:dev
+    command: ["uvicorn", "coordinator.runner.main:app", "--host", "0.0.0.0", "--port", "9000"]
+    # Сокет Docker доступен только root.
+    user: "0"
+    environment: *app-env
+    secrets: [coord_runner_token]
+    restart: unless-stopped
+    volumes: [/var/run/docker.sock:/var/run/docker.sock]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }
+
+  web:
+    build: { context: web }
+    image: coord/web:dev
+    ports: ["8443:443", "8080:80"]
+    volumes: ["./deploy/tls:/etc/nginx/tls:ro"]
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
+  # Кладёт только открытый сертификат CA в общий том: его монтируют все контейнеры агентов,
+  # в том числе созданные runner-ом, у которых нет доступа к файлам хоста.
+  tls-init:
+    image: coord/platform:dev
+    user: "0"
+    command: ["sh", "-c", "cp /tls-src/ca.crt /certs/ca.crt && chmod 644 /certs/ca.crt"]
+    volumes:
+      - ./deploy/tls:/tls-src:ro
+      - tls-ca:/certs
+
+  # Три контейнера-заглушки с разной мощностью заменяют разные серверы из ТЗ (таблица 2.1).
+  worker-01:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_NAME: worker-01
+      AGENT_TOKEN_FILE: /run/secrets/worker_01_token
+      WORKER_THREADS: "8"
+    secrets: [worker_01_token]
+    labels: { lab.worker: worker-01, lab.managed: "true" }
+    volumes: ["videos-01:/data/videos", "tls-ca:/certs:ro"]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512m }
+
+  worker-02:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_NAME: worker-02
+      AGENT_TOKEN_FILE: /run/secrets/worker_02_token
+      WORKER_THREADS: "16"
+    secrets: [worker_02_token]
+    labels: { lab.worker: worker-02, lab.managed: "true" }
+    volumes: ["videos-02:/data/videos", "tls-ca:/certs:ro"]
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1g }
+
+  worker-03:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_NAME: worker-03
+      AGENT_TOKEN_FILE: /run/secrets/worker_03_token
+      WORKER_THREADS: "2"
+    secrets: [worker_03_token]
+    labels: { lab.worker: worker-03, lab.managed: "true" }
+    volumes: ["videos-03:/data/videos", "tls-ca:/certs:ro"]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
+  # Метрики и дашборд: docker compose --profile monitoring up -d
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v3.5.0
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/coord_admin_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    secrets: [coord_admin_password]
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [prometheus]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
 
   # Линтер и тесты: docker compose --profile ci run --rm tests
   tests:
@@ -70,5 +227,20 @@ services:
       redis: { condition: service_healthy }
     command: ["pytest", "-q"]
 
+secrets:
+  coord_admin_password: { file: ./secrets/coord_admin_password }
+  coord_agent_tokens: { file: ./secrets/coord_agent_tokens }
+  coord_runner_token: { file: ./secrets/coord_runner_token }
+  worker_01_token: { file: ./secrets/worker_01_token }
+  worker_02_token: { file: ./secrets/worker_02_token }
+  worker_03_token: { file: ./secrets/worker_03_token }
+
 volumes:
   pgdata:
+  prometheus-data:
+  grafana-data:
+  videos-01:
+  videos-02:
+  videos-03:
+  tls-ca:
+    name: coord-tls-ca

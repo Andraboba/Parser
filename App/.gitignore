@@ -26,6 +26,8 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+secrets/
+deploy/tls/
 *.pem
 *.key
 
@@ -38,6 +40,11 @@ videos/
 # Логи
 *.log
 logs/
+
+# Сырые результаты нагрузочного теста. Итоговый отчёт: docs/load-report.md
+docs/load-results.md
+docs/load-scale.md
+docs/load-stats.txt
 
 # IDE и ОС
 .idea/

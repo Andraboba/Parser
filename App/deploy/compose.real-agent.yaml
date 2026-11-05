@@ -1,0 +1,63 @@
+# Вместо заглушек — настоящие агенты из каталога Agent/ и управляемый тестовый сайт:
+#   docker compose -f compose.yaml -f deploy/compose.real-agent.yaml up -d --build
+# Платформа при этом не меняется (раздел 16 плана). Настоящий внешний сайт здесь не используется.
+x-real-agent: &real-agent
+  build: { context: ../Agent }
+  image: lab/agent:1.0.0
+  environment: &real-env
+    AGENT_COORDINATOR_URL: https://web
+    SSL_CERT_FILE: /certs/ca.crt
+    AGENT_IMAGE: lab/agent:1.0.0
+    AGENT_SITE_TEMPLATE: http://site:8081/page/{id}
+    AGENT_RPS: "200"
+  depends_on:
+    web: { condition: service_healthy }
+    tls-init: { condition: service_completed_successfully }
+    site: { condition: service_started }
+
+services:
+  site:
+    image: python:3.13-slim
+    command: ["python", "-u", "/site/site.py"]
+    environment:
+      PYTHONPATH: /support
+    volumes:
+      - ./deploy/real-agent:/site:ro
+      - ../Agent/tests/support:/support:ro
+
+  worker-01:
+    <<: *real-agent
+    # Агент читает токен из окружения, а секрет лежит файлом: переносим его при старте.
+    entrypoint: ["sh", "-c", "AGENT_TOKEN=$$(cat /run/secrets/worker_01_token) exec python -m agent run --config /etc/agent/agent.yaml"]
+    environment:
+      <<: *real-env
+      AGENT_NAME: worker-01
+      AGENT_THREADS: "8"
+    volumes:
+      - videos-01:/data/videos
+      - tls-ca:/certs:ro
+      - ./deploy/real-agent/agent.yaml:/etc/agent/agent.yaml:ro
+
+  worker-02:
+    <<: *real-agent
+    entrypoint: ["sh", "-c", "AGENT_TOKEN=$$(cat /run/secrets/worker_02_token) exec python -m agent run --config /etc/agent/agent.yaml"]
+    environment:
+      <<: *real-env
+      AGENT_NAME: worker-02
+      AGENT_THREADS: "16"
+    volumes:
+      - videos-02:/data/videos
+      - tls-ca:/certs:ro
+      - ./deploy/real-agent/agent.yaml:/etc/agent/agent.yaml:ro
+
+  worker-03:
+    <<: *real-agent
+    entrypoint: ["sh", "-c", "AGENT_TOKEN=$$(cat /run/secrets/worker_03_token) exec python -m agent run --config /etc/agent/agent.yaml"]
+    environment:
+      <<: *real-env
+      AGENT_NAME: worker-03
+      AGENT_THREADS: "2"
+    volumes:
+      - videos-03:/data/videos
+      - tls-ca:/certs:ro
+      - ./deploy/real-agent/agent.yaml:/etc/agent/agent.yaml:ro

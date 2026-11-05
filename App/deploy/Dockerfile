@@ -12,9 +12,13 @@ COPY migrations ./migrations
 FROM base AS dev
 RUN pip install ".[dev]"
 COPY tests ./tests
+COPY stub ./stub
+COPY docs ./docs
+COPY scripts ./scripts
 
 FROM base AS runtime
 RUN useradd --system --uid 10001 coord
 USER coord
 EXPOSE 8000
-CMD ["uvicorn", "coordinator.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Перед api стоит только nginx, порт наружу не открыт: адресу клиента из его заголовков можно верить.
+CMD ["uvicorn", "coordinator.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*", "--no-access-log"]

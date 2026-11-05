@@ -6,3 +6,17 @@ services:
     ports: !reset []
   api:
     ports: !reset []
+  web:
+    ports: !reset []
+  # Тестам нужны только база и redis, файлов секретов им не надо.
+  tests:
+    # Контрактные тесты запускают настоящего клиента агента из соседнего каталога.
+    volumes:
+      - ../Agent:/agent-src:ro
+    environment:
+      PYTHONPATH: /agent-src
+      # Тесты считают доли от базового лимита, а не от повышенного лимита стенда.
+      COORD_GLOBAL_RPS_LIMIT: "20"
+      COORD_RUNNER_URL: ""
+      # Тестовый клиент ходит по HTTP, Secure-cookie он бы не отправил.
+      COORD_COOKIE_SECURE: "false"

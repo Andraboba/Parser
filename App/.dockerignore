@@ -6,3 +6,5 @@
 web/node_modules
 *.docx
 .env
+secrets
+deploy/tls
