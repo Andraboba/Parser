@@ -64,6 +64,20 @@ class AdaptiveLimiterTests(unittest.TestCase):
         limiter.on_success()
         self.assertLessEqual(limiter.rate, 10)
 
+    def test_coordinator_share_is_recovery_ceiling(self) -> None:
+        """После 429 нельзя восстанавливаться выше выданной координатором доли."""
+        limiter = AdaptiveLimiter(rate=200, recover_after=1, recover_factor=2.0)
+        limiter.set_share(5)
+        limiter.on_throttled()
+        for _ in range(40):
+            limiter.on_success()
+        self.assertLessEqual(limiter.rate, 5)
+
+    def test_local_limit_caps_large_share(self) -> None:
+        limiter = AdaptiveLimiter(rate=10)
+        limiter.set_share(1000)
+        self.assertEqual(limiter.rate, 10)
+
 
 if __name__ == "__main__":
     unittest.main()

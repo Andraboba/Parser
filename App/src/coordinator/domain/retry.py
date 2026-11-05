@@ -26,6 +26,7 @@ ERROR_GROUPS: dict[str, str] = {
     "download_error": "download",
     "size_mismatch": "download",
     "checksum_mismatch": "download",
+    "range_mismatch": "download",
     "too_large": "policy",
     "insufficient_space": "disk",
     "disk_full": "disk",

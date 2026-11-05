@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Загрузчик: полная загрузка, продолжение по Range, проверки размера и места."""
 
 from __future__ import annotations
@@ -47,6 +47,15 @@ class DownloaderTests(unittest.TestCase):
         self.assertEqual(result.sha256, hashlib.sha256(VIDEO_PAYLOAD).hexdigest())
         self.assertEqual(result.path.suffix, ".mp4")
         self.assertEqual(result.path, self.storage.paths(105).video(".mp4"))
+
+    def test_progress_callback_receives_bytes(self) -> None:
+        seen: list[int] = []
+        result = self.downloader.download(
+            f"{self.site.url}/video/110.mp4", 110, progress=seen.append,
+        )
+        self.assertTrue(seen)
+        self.assertEqual(seen[-1], result.size)
+        self.assertEqual(result.size, len(VIDEO_PAYLOAD))
 
     def test_second_call_is_idempotent(self) -> None:
         url = f"{self.site.url}/video/106.mp4"

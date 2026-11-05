@@ -49,6 +49,8 @@ class Telemetry:
         self._cpu_ts = time.monotonic()
         self._net: tuple[int, int] | None = self._net_bytes()
         self._net_ts = time.monotonic()
+        self._disk: tuple[int, int] | None = self._disk_bytes()
+        self._disk_ts = time.monotonic()
 
     # -- cgroup ---------------------------------------------------------
     def _cpu_usage_usec(self) -> int | None:
@@ -112,6 +114,66 @@ class Telemetry:
         except (OSError, ValueError):
             return None
 
+    # -- диск, swap, файлы, соединения ---------------------------------
+    def _disk_bytes(self) -> tuple[int, int] | None:
+        """Суммарные rbytes/wbytes контейнера из cgroup v2."""
+        raw = _read(_CGROUP / "io.stat")
+        if not raw:
+            return None
+        read = write = 0
+        found = False
+        for line in raw.splitlines():
+            for field in line.split():
+                if field.startswith("rbytes="):
+                    read += int(field[7:] or 0)
+                    found = True
+                elif field.startswith("wbytes="):
+                    write += int(field[7:] or 0)
+                    found = True
+        return (read, write) if found else None
+
+    def _swap_used(self) -> int | None:
+        current = _read_int(_CGROUP / "memory.swap.current")
+        if current is not None:
+            return current
+        raw = _read(Path("/proc/meminfo"))
+        if not raw:
+            return None
+        values: dict[str, int] = {}
+        for line in raw.splitlines():
+            name, _, rest = line.partition(":")
+            parts = rest.split()
+            if parts and parts[0].isdigit():
+                values[name.strip()] = int(parts[0]) * 1024
+        if "SwapTotal" not in values:
+            return None
+        return max(0, values["SwapTotal"] - values.get("SwapFree", 0))
+
+    @staticmethod
+    def _open_files() -> int | None:
+        try:
+            return len(os.listdir("/proc/self/fd"))
+        except OSError:
+            return None
+
+    @staticmethod
+    def _connections() -> int | None:
+        """Установленные TCP-соединения процесса (ESTABLISHED) по /proc/net/tcp."""
+        total = 0
+        found = False
+        for name in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                with open(name, encoding="utf-8") as handle:
+                    lines = handle.readlines()[1:]
+            except OSError:
+                continue
+            found = True
+            for line in lines:
+                fields = line.split()
+                if len(fields) > 3 and fields[3] == "01":
+                    total += 1
+        return total if found else None
+
     # -- снимок ---------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -132,6 +194,15 @@ class Telemetry:
             tx_rate = round(max(0, net[1] - self._net[1]) / elapsed)
         self._net = net if net is not None else self._net
         self._net_ts = now
+
+        disk = self._disk_bytes()
+        disk_read_bps = disk_write_bps = None
+        if disk is not None and self._disk is not None:
+            elapsed = max(1e-6, now - self._disk_ts)
+            disk_read_bps = round(max(0, disk[0] - self._disk[0]) / elapsed)
+            disk_write_bps = round(max(0, disk[1] - self._disk[1]) / elapsed)
+        self._disk = disk if disk is not None else self._disk
+        self._disk_ts = now
 
         try:
             disk = shutil.disk_usage(self.storage.root)
@@ -158,5 +229,10 @@ class Telemetry:
             "load1": load,
             "net_rx_bps": rx_rate,
             "net_tx_bps": tx_rate,
+            "disk_read_bps": disk_read_bps,
+            "disk_write_bps": disk_write_bps,
+            "swap_used_bytes": self._swap_used(),
+            "open_files": self._open_files(),
+            "connections": self._connections(),
             "uptime_seconds": round(now - self.started_at, 1),
         }

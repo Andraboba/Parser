@@ -160,6 +160,16 @@ export function JobPage({ id }: { id: number }) {
               <Stat label="Попытка запуска" value={count(job.run_attempt)} />
               <Stat label="Потоков на узел" value={job.threads === null ? "как у узла" : count(job.threads)} />
               <Stat
+                label="Узлы задания"
+                value={
+                  Object.keys(job.workers).length
+                    ? Object.entries(job.workers)
+                        .map(([name, threads]) => (threads ? `${name} (${threads})` : name))
+                        .join(", ")
+                    : "все"
+                }
+              />
+              <Stat
                 label="Общий лимит, запросов/с"
                 value={job.global_rate_limit_rps === null ? "нет" : count(job.global_rate_limit_rps)}
               />

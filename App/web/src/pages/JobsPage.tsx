@@ -1,7 +1,7 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { useAuth } from "../auth";
-import { createJob, type JobDraft, listJobs } from "../api";
+import { createJob, type JobDraft, listJobs, listWorkers, type WorkerNode } from "../api";
 import { ErrorMessage, JobActions, ProgressBar, StatusBadge } from "../components";
 import { count, rangeText } from "../format";
 import { errorText, usePolling } from "../usePolling";
@@ -25,8 +25,15 @@ function CreateJobForm({ onCreated }: { onCreated: () => void }) {
   const [range, setRange] = useState("[1,10000]");
   const [chunkSize, setChunkSize] = useState("1000");
   const [optional, setOptional] = useState<Record<string, string>>({});
+  const [workers, setWorkers] = useState<WorkerNode[]>([]);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [workerThreads, setWorkerThreads] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    listWorkers().then(setWorkers).catch(() => setWorkers([]));
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -37,6 +44,13 @@ function CreateJobForm({ onCreated }: { onCreated: () => void }) {
       const value = optional[key];
       if (value) Object.assign(draft, { [key]: Number(value) });
     }
+    const chosen = workers
+      .filter((worker) => selected[worker.name])
+      .map((worker) => {
+        const threads = workerThreads[worker.name];
+        return threads ? { name: worker.name, threads: Number(threads) } : { name: worker.name };
+      });
+    if (chosen.length > 0) draft.workers = chosen;
     try {
       await createJob(draft);
       onCreated();
@@ -80,6 +94,44 @@ function CreateJobForm({ onCreated }: { onCreated: () => void }) {
         [A,B] — от A до B включительно. A — от 0 до A. [A,] — от A без верхней границы. Пустое поле
         — от 0 без верхней границы.
       </p>
+      <details className="more-fields">
+        <summary>Узлы и индивидуальные потоки</summary>
+        {workers.length === 0 ? (
+          <p className="hint">Узлы ещё не регистрировались. Задание будет доступно всем узлам.</p>
+        ) : (
+          <div className="job-form-fields">
+            {workers.map((worker) => (
+              <div key={worker.id} className="worker-choice">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selected[worker.name])}
+                    onChange={(e) =>
+                      setSelected({ ...selected, [worker.name]: e.target.checked })
+                    }
+                  />
+                  {worker.name}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="потоков"
+                  aria-label={`Потоков для ${worker.name}`}
+                  disabled={!selected[worker.name]}
+                  value={workerThreads[worker.name] ?? ""}
+                  onChange={(e) =>
+                    setWorkerThreads({ ...workerThreads, [worker.name]: e.target.value })
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="hint">
+          Если не выбрать ни одного узла, блоки сможет брать любой зарегистрированный узел.
+          Индивидуальное число потоков важнее общего значения задания.
+        </p>
+      </details>
       <details className="more-fields">
         <summary>Дополнительные параметры</summary>
         <div className="job-form-fields">

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Клиент координатора: контракт, повторные попытки, outbox."""
 
 from __future__ import annotations
@@ -45,6 +45,8 @@ class CoordinatorTests(unittest.TestCase):
             self.assertIsNotNone(chunk)
             assert chunk is not None
             self.assertEqual(chunk.range_start, 100)
+            self.assertEqual(chunk.request_timeout_seconds, 20)
+            self.assertEqual(chunk.max_retries, 2)
             self.assertFalse(chunk.expired())
 
             client.progress(

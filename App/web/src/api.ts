@@ -66,7 +66,7 @@ export interface WorkerNode {
   last_heartbeat_at: string | null;
   leased_chunks: number;
   current_chunks: number[];
-  metrics: Record<string, number> | null;
+  metrics: Record<string, any> | null;
   counters: Record<string, number> | null;
   container_state: ContainerState | null;
 }
@@ -126,6 +126,11 @@ export interface WorkerPatch {
   rps_limit?: number | null;
 }
 
+export interface JobWorkerDraft {
+  name: string;
+  threads?: number;
+}
+
 export interface JobDraft {
   range: string;
   chunk_size: number;
@@ -136,6 +141,7 @@ export interface JobDraft {
   max_ids?: number;
   max_duration_seconds?: number;
   stop_on_consecutive_missing?: number;
+  workers?: JobWorkerDraft[];
 }
 
 export interface Item {

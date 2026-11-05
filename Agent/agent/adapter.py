@@ -138,7 +138,7 @@ class SiteAdapter:
         self.http = http
 
     # ------------------------------------------------------------------
-    def check(self, item_id: int) -> CheckResult:
+    def check(self, item_id: int, timeout: float | None = None) -> CheckResult:
         url = self.config.url_for(item_id)
         headers = {
             "User-Agent": self.config.user_agent,
@@ -151,7 +151,7 @@ class SiteAdapter:
             status, response_headers, body = self.http.get(
                 url,
                 headers=headers,
-                timeout=self.config.request_timeout_seconds,
+                timeout=timeout if timeout is not None else self.config.request_timeout_seconds,
                 follow_redirects=self.config.follow_redirects,
                 allowed_hosts=self.config.allowed_redirect_hosts,
             )

@@ -80,6 +80,7 @@ class AdaptiveLimiter:
         recover_after: int = 20,
         recover_factor: float = 1.15,
     ) -> None:
+        self._configured = float(rate)
         self._base = float(rate)
         self._min = float(min_rate)
         self._recover_after = max(1, int(recover_after))
@@ -96,6 +97,18 @@ class AdaptiveLimiter:
     @property
     def rate(self) -> float:
         return self._bucket.rate
+
+    def set_share(self, rate: float) -> None:
+        """Установить выданную координатором долю как новый потолок.
+
+        Без этого восстановление после 429 шло бы к локальному limits.rps и могло
+        превысить общий лимит стенда (ТЗ, п. 9).
+        """
+        with self._lock:
+            # Локальный limits.rps остаётся страховочным потолком, доля координатора
+            # может быть только ниже него.
+            self._base = min(self._configured, float(rate))
+            self._bucket.set_rate(self._base)
 
     def acquire(self, tokens: float = 1.0, timeout: float | None = None) -> bool:
         return self._bucket.acquire(tokens, timeout)

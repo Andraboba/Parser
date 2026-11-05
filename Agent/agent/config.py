@@ -66,7 +66,8 @@ class LimitsConfig:
 
     rps: float = 20.0
     max_connections: int = 16
-    check_concurrency: int = 4
+    # По умолчанию не ниже agent.threads (8), иначе заявленные потоки не работали бы.
+    check_concurrency: int = 8
     download_concurrency: int = 2
 
 
@@ -291,7 +292,7 @@ def parse_config(data: Mapping[str, Any]) -> AgentConfig:
         limits=LimitsConfig(
             rps=rps,
             max_connections=_get_int(limits, "max_connections", 16, "limits"),
-            check_concurrency=_get_int(limits, "check_concurrency", 4, "limits"),
+            check_concurrency=_get_int(limits, "check_concurrency", 8, "limits"),
             download_concurrency=_get_int(limits, "download_concurrency", 2, "limits"),
         ),
         retry=RetryConfig(

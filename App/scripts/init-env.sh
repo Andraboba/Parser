@@ -34,9 +34,12 @@ fi
 if [ ! -f secrets/ssh_client_key ]; then
   ssh-keygen -q -t ed25519 -N "" -C coordinator -f secrets/ssh_client_key
   mv secrets/ssh_client_key.pub secrets/ssh_client_key_pub
-  chmod 644 secrets/ssh_client_key secrets/ssh_client_key_pub
+  chmod 600 secrets/ssh_client_key
+  chmod 644 secrets/ssh_client_key_pub
   echo "создан ключ SSH secrets/ssh_client_key"
 fi
+# Закрытый ключ не должен быть доступен посторонним даже на хосте.
+[ -f secrets/ssh_client_key ] && chmod 600 secrets/ssh_client_key
 
 [ -f .env ] || cp .env.example .env
 

@@ -25,7 +25,7 @@ coordinator:
 limits:
   rps: 20                    # локальный предохранитель; основной лимит выдаёт координатор
   max_connections: 16
-  check_concurrency: 4       # потолок параллельных проверок
+  check_concurrency: 8       # потолок параллельных проверок (не ниже agent.threads)
   download_concurrency: 2    # потолок одновременных загрузок
 
 retry:

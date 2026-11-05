@@ -22,6 +22,7 @@ x-server: &server
   restart: unless-stopped
   # Агент здесь обычный процесс: кто-то должен прибирать завершившиеся процессы.
   init: true
+  pids_limit: 256
   secrets: [ssh_client_key_pub]
   depends_on:
     tls-init: { condition: service_completed_successfully }

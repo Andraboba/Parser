@@ -128,6 +128,14 @@ def _delta(newest: dict | None, oldest: dict | None, key: str) -> int:
     return max(0, int(newest.get(key, 0)) - int(oldest.get(key, 0)))
 
 
+def _extra_int(extra: dict | None, key: str) -> int | None:
+    value = (extra or {}).get(key)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 async def worker_snapshots(session: AsyncSession, settings: Settings) -> list[WorkerSnapshot]:
     workers = list(await session.scalars(select(Worker).order_by(Worker.id)))
     window = func.now() - timedelta(seconds=settings.balance_window_seconds)
@@ -145,6 +153,7 @@ async def worker_snapshots(session: AsyncSession, settings: Settings) -> list[Wo
         counters = [s.counters for s in recent if s.counters]
         newest, oldest = (counters[0], counters[-1]) if len(counters) > 1 else (None, None)
         latest = recent[0] if recent else None
+        extra = latest.extra if latest else None
         state = worker.container_state or {}
         min_free_gb = (
             settings.default_min_free_space_gb if worker.min_free_space_gb is None
@@ -172,6 +181,11 @@ async def worker_snapshots(session: AsyncSession, settings: Settings) -> list[Wo
             container_state=state.get("state"),
             restart_count=int(state.get("restart_count") or 0),
             oom_killed=bool(state.get("oom_killed")),
+            swap_used_bytes=_extra_int(extra, "swap_used_bytes"),
+            disk_read_bps=_extra_int(extra, "disk_read_bps"),
+            disk_write_bps=_extra_int(extra, "disk_write_bps"),
+            open_files=_extra_int(extra, "open_files"),
+            connections=_extra_int(extra, "connections"),
         ))
     return snapshots
 

@@ -225,6 +225,9 @@ class MockCoordinator:
             "next_id": 100,
             "lease_ttl": 30,
             "rps_share": 10,
+            # Параметры задания, которые координатор отдаёт в lease.
+            "request_timeout_seconds": 20,
+            "max_retries": 2,
         }
         self.fail_first_lease = fail_first_lease
         self.registered: list[dict[str, Any]] = []

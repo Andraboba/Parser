@@ -238,6 +238,8 @@ class TestOperations:
         assert host["Privileged"] is False
         assert host["Memory"] == 256 * 1024**2
         assert host["NanoCpus"] == 500_000_000
+        assert host["ReadonlyRootfs"] is True
+        assert host["PidsLimit"] == 256
         assert host["Binds"] == ["lab-videos-worker-04:/data/videos", "coord-tls-ca:/certs:ro"]
         assert created["Labels"]["lab.worker"] == "worker-04"
         assert created["State"] == "running"

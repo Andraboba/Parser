@@ -16,18 +16,27 @@
 from __future__ import annotations
 
 import os
+import random
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
 from . import __version__
-from .adapter import STATUS_FOUND, STATUS_RATE_LIMITED, SiteAdapter
+from .adapter import (
+    STATUS_FAILED,
+    STATUS_FOUND,
+    STATUS_RATE_LIMITED,
+    STATUS_RETRY,
+    CheckResult,
+    SiteAdapter,
+)
 from .config import AgentConfig
 from .coordinator import Chunk, CoordinatorClient
-from .downloader import Downloader
+from .downloader import DownloadResult, Downloader
 from .errors import CoordinatorError, DownloadError, NetworkError
 from .http_client import HttpClient
 from .journal import Outbox, StateStore
@@ -130,6 +139,10 @@ class AgentRuntime:
         self._cancelled_chunks: set[int] = set()
         self._worker_id: str | None = None
         self._download_slots = threading.BoundedSemaphore(max(1, config.limits.download_concurrency))
+        self._progress_lock = threading.Lock()
+        self._active_checks = 0
+        self._active_downloads = 0
+        self._current_items: dict[int, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     @property
@@ -246,7 +259,7 @@ class AgentRuntime:
                 },
             )
             if chunk.rps_share:
-                self.limiter.bucket.set_rate(max(0.1, chunk.rps_share))
+                self.limiter.set_share(max(0.1, chunk.rps_share))
         return chunk
 
     # ------------------------------------------------------------------
@@ -389,66 +402,196 @@ class AgentRuntime:
             _log.warning("прогресс не отправлен", extra={"chunk_id": chunk_id, "error": str(exc)})
             return False
 
-    def _process_item(self, item_id: int) -> dict[str, Any]:
-        check = self.adapter.check(item_id)
-        if check.status == STATUS_RATE_LIMITED:
-            self.limiter.on_throttled()
-            retry_after = check.retry_after or 5.0
-            if self._stop.wait(min(retry_after, 60.0)):
-                return {"external_id": item_id, "status": "cancelled", "error_class": "shutdown"}
-        else:
-            self.limiter.on_success()
-        status = check.status
-        error_class = check.error_class
-        file_info: dict[str, Any] | None = None
+    # ------------------------------------------------------------------
+    def _begin_item(self, item_id: int) -> None:
+        with self._progress_lock:
+            self._active_checks += 1
+            self._current_items[item_id] = {
+                "id": item_id, "title": None, "status": "checking",
+            }
 
-        if (
-            check.status == STATUS_FOUND
-            and check.download_url
-            and self.config.site.download.policy != "never"
-        ):
-            with self._download_slots:
-                try:
-                    downloaded = self.downloader.download(
-                        check.download_url,
-                        item_id,
-                        expected_size=check.size,
-                        mime=check.mime,
-                    )
-                    file_info = downloaded.as_dict()
-                    status = "completed"
-                except (DownloadError, NetworkError, OSError) as exc:
-                    error_class = getattr(exc, "error_class", "download_error")
-                    status = "failed"
-                    _log.warning(
-                        "загрузка не удалась",
-                        extra={"item_id": item_id, "error": str(exc), "class": error_class},
-                    )
+    def _update_item(self, item_id: int, **changes: Any) -> None:
+        with self._progress_lock:
+            item = self._current_items.setdefault(item_id, {"id": item_id})
+            item.update(changes)
 
-        result: dict[str, Any] = {
-            "external_id": item_id,
-            "status": status,
-            "http_status": check.http_status,
-            "error_class": error_class,
-            "title": check.title,
-            "page_url": check.page_url,
-            "download_url": check.download_url,
-            "file": file_info,
-        }
+    def _end_item(self, item_id: int) -> None:
+        with self._progress_lock:
+            self._active_checks = max(0, self._active_checks - 1)
+            self._current_items.pop(item_id, None)
 
-        if check.status == STATUS_FOUND:
-            metadata = check.as_metadata()
-            metadata["file"] = file_info
-            metadata["status"] = status
-            metadata["downloaded_at"] = (
-                datetime.now(tz=timezone.utc).isoformat(timespec="seconds") if file_info else None
+    def _progress_snapshot(self) -> dict[str, Any]:
+        with self._progress_lock:
+            return {
+                "active_checks": self._active_checks,
+                "active_downloads": self._active_downloads,
+                "current_items": list(self._current_items.values()),
+            }
+
+    def _check_item(self, item_id: int) -> CheckResult:
+        """Проверка с повторами: тайм-аут и max_retries берутся из задания."""
+        chunk = self._current_chunk
+        timeout = (
+            chunk.request_timeout_seconds
+            if chunk is not None and chunk.request_timeout_seconds is not None
+            else self.config.site.request_timeout_seconds
+        )
+        max_retries = (
+            chunk.max_retries
+            if chunk is not None and chunk.max_retries is not None
+            else self.config.retry.max_retries
+        )
+        attempts = max(0, int(max_retries)) + 1
+        check: CheckResult | None = None
+        for attempt in range(attempts):
+            check = self.adapter.check(item_id, timeout=timeout)
+            if check.status not in (STATUS_RETRY, STATUS_RATE_LIMITED):
+                return check
+            if check.status in (STATUS_RATE_LIMITED, STATUS_RETRY):
+                # 429 и 5xx одинаково снижают локальную частоту (ТЗ, п. 9).
+                self.limiter.on_throttled()
+            if attempt + 1 >= attempts:
+                break
+            delay = self.config.retry.delay(attempt, random.random())
+            if check.status == STATUS_RATE_LIMITED and check.retry_after is not None:
+                delay = max(delay, min(check.retry_after, 60.0))
+            if self._stop.wait(min(delay, 60.0)):
+                return replace(check, status="cancelled", error_class="shutdown")
+        assert check is not None
+        if check.status == STATUS_RETRY:
+            # 5xx и сетевые ошибки после исчерпания попыток — окончательная ошибка.
+            return replace(
+                check, status=STATUS_FAILED,
+                error_class=check.error_class or "retries_exhausted",
             )
-            try:
-                self.storage.save_metadata(item_id, metadata)
-            except OSError as exc:
-                _log.warning("метаданные не сохранены", extra={"item_id": item_id, "error": str(exc)})
+        return check
 
-        return result
+    def _download_file(
+        self, item_id: int, check: CheckResult, on_progress: Callable[[int], None],
+    ) -> DownloadResult:
+        """Загрузка с повторами для временных ошибок; 403/404/размер не повторяем."""
+        chunk = self._current_chunk
+        max_retries = (
+            chunk.max_retries
+            if chunk is not None and chunk.max_retries is not None
+            else self.config.retry.max_retries
+        )
+        attempts = max(0, int(max_retries)) + 1
+        non_retryable = {"forbidden", "not_found", "too_large", "insufficient_space"}
+        for attempt in range(attempts):
+            try:
+                return self.downloader.download(
+                    check.download_url or "",
+                    item_id,
+                    expected_size=check.size,
+                    mime=check.mime,
+                    progress=on_progress,
+                )
+            except (DownloadError, NetworkError, OSError) as exc:
+                error_class = getattr(exc, "error_class", "download_error")
+                if error_class in non_retryable or attempt + 1 >= attempts:
+                    raise
+                delay = self.config.retry.delay(attempt, random.random())
+                if self._stop.wait(min(delay, 60.0)):
+                    raise
+        raise DownloadError("загрузка не удалась", error_class="download_error")
+
+    def _process_item(self, item_id: int) -> dict[str, Any]:
+        self._begin_item(item_id)
+        try:
+            check = self._check_item(item_id)
+            self._update_item(item_id, title=check.title, status=check.status)
+            if check.status not in (
+                STATUS_RETRY, STATUS_RATE_LIMITED, STATUS_FAILED, "cancelled",
+            ):
+                self.limiter.on_success()
+            status = check.status
+            error_class = check.error_class
+            file_info: dict[str, Any] | None = None
+
+            if (
+                check.status == STATUS_FOUND
+                and check.download_url
+                and self.config.site.download.policy != "never"
+            ):
+                with self._download_slots:
+                    with self._progress_lock:
+                        self._active_downloads += 1
+                    self._update_item(
+                        item_id, status="downloading", download_bytes=0,
+                        download_total=check.size,
+                    )
+                    last = {"time": time.monotonic(), "bytes": 0, "bps": 0.0}
+
+                    def on_progress(written: int) -> None:
+                        now = time.monotonic()
+                        elapsed = now - last["time"]
+                        if elapsed > 0 and written > last["bytes"]:
+                            last["bps"] = (written - last["bytes"]) / elapsed
+                        last["time"] = now
+                        last["bytes"] = written
+                        self._update_item(
+                            item_id,
+                            download_bytes=written,
+                            download_total=check.size,
+                            download_bps=round(last["bps"]),
+                        )
+
+                    try:
+                        downloaded = self._download_file(item_id, check, on_progress)
+                        file_info = downloaded.as_dict()
+                        status = "completed"
+                        self._update_item(
+                            item_id, status=status, download_bytes=downloaded.size,
+                            download_total=downloaded.size, download_bps=0,
+                        )
+                    except (DownloadError, NetworkError, OSError) as exc:
+                        error_class = getattr(exc, "error_class", "download_error")
+                        status = "failed"
+                        _log.warning(
+                            "загрузка не удалась",
+                            extra={"item_id": item_id, "error": str(exc), "class": error_class},
+                        )
+                    finally:
+                        with self._progress_lock:
+                            self._active_downloads = max(0, self._active_downloads - 1)
+
+            result: dict[str, Any] = {
+                "external_id": item_id,
+                "status": status,
+                "http_status": check.http_status,
+                "error_class": error_class,
+                "title": check.title,
+                "page_url": check.page_url,
+                "download_url": check.download_url,
+                "file": file_info,
+            }
+
+            if check.status == STATUS_FOUND:
+                metadata = check.as_metadata()
+                metadata["file"] = file_info
+                metadata["status"] = status
+                metadata["error_class"] = error_class
+                metadata["server_name"] = self.config.name
+                metadata["local_path"] = (
+                    file_info["path"] if file_info
+                    else str(self.storage.paths(item_id).directory)
+                )
+                metadata["downloaded_at"] = (
+                    datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+                    if file_info else None
+                )
+                try:
+                    self.storage.save_metadata(item_id, metadata)
+                except OSError as exc:
+                    _log.warning(
+                        "метаданные не сохранены",
+                        extra={"item_id": item_id, "error": str(exc)},
+                    )
+
+            return result
+        finally:
+            self._end_item(item_id)
 
     # ------------------------------------------------------------------
     def _heartbeat_loop(self) -> None:
@@ -459,11 +602,13 @@ class AgentRuntime:
         if self._worker_id is None:
             return
         chunk = self._current_chunk
+        metrics = self.telemetry.snapshot()
+        metrics.update(self._progress_snapshot())
         payload = {
             "status": "busy" if chunk is not None else "idle",
             "free_slots": 0 if chunk is not None else self.concurrency,
             "active_chunks": [chunk.chunk_id] if chunk is not None else [],
-            "metrics": self.telemetry.snapshot(),
+            "metrics": metrics,
             "counters": self.counters.to_dict(),
         }
         try:
@@ -477,7 +622,7 @@ class AgentRuntime:
         """Указания координатора: доля общего лимита, число потоков и отмена блока."""
         share = answer.get("rps_share")
         if share:
-            self.limiter.bucket.set_rate(max(0.1, float(share)))
+            self.limiter.set_share(max(0.1, float(share)))
         threads = answer.get("threads")
         if threads:
             # Пул создаётся на блок: новое значение начнёт действовать со следующего блока.

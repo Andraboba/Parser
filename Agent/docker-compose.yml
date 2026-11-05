@@ -16,6 +16,7 @@ x-agent: &agent
     - ./config/agent.compose.yaml:/etc/agent/agent.yaml:ro
   restart: unless-stopped
   read_only: true
+  pids_limit: 256
   tmpfs:
     - /tmp
   networks:

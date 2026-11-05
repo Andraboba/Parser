@@ -61,6 +61,25 @@ export function WorkerPage({ id }: { id: number }) {
   };
 
   const metrics = worker?.metrics ?? {};
+  type CurrentItem = {
+    id: number;
+    title?: string | null;
+    status?: string;
+    download_bytes?: number;
+    download_total?: number | null;
+    download_bps?: number;
+  };
+  const currentItems = Array.isArray(metrics.current_items)
+    ? (metrics.current_items as CurrentItem[])
+    : [];
+  const itemText = (item: CurrentItem): string => {
+    const name = item.title ? `${item.id} — ${item.title}` : String(item.id);
+    if (item.status !== "downloading" || item.download_bytes === undefined) return name;
+    const total = item.download_total;
+    const percent = total ? ` ${Math.round((item.download_bytes / total) * 100)} %` : "";
+    const speed = item.download_bps ? `, ${bytes(item.download_bps)}/с` : "";
+    return `${name}: ${bytes(item.download_bytes)}${total ? ` из ${bytes(total)}` : ""}${percent}${speed}`;
+  };
   return (
     <>
       <p>
@@ -120,6 +139,14 @@ export function WorkerPage({ id }: { id: number }) {
                 label="Текущие блоки"
                 value={worker.current_chunks.length ? worker.current_chunks.join(", ") : "нет"}
               />
+              <Stat
+                label="Текущие элементы"
+                value={
+                  currentItems.length
+                    ? currentItems.map(itemText).join("; ")
+                    : "—"
+                }
+              />
               <Stat label="Активных проверок" value={count(metrics.active_checks ?? 0)} />
               <Stat label="Активных загрузок" value={count(metrics.active_downloads ?? 0)} />
               <Stat label="Проверено" value={count(worker.counters?.checked ?? 0)} />
@@ -155,9 +182,20 @@ export function WorkerPage({ id }: { id: number }) {
                     : `${bytes(metrics.disk_free_bytes)} из ${bytes(metrics.disk_total_bytes)}`
                 }
               />
+              <Stat label="Swap" value={bytes(metrics.swap_used_bytes)} />
               <Stat label="Нагрузка (load1)" value={metrics.load1?.toString() ?? "—"} />
               <Stat label="Сеть, приём/с" value={bytes(metrics.net_rx_bps)} />
               <Stat label="Сеть, передача/с" value={bytes(metrics.net_tx_bps)} />
+              <Stat label="Диск, чтение/с" value={bytes(metrics.disk_read_bps)} />
+              <Stat label="Диск, запись/с" value={bytes(metrics.disk_write_bps)} />
+              <Stat
+                label="Открытых файлов"
+                value={metrics.open_files == null ? "—" : count(metrics.open_files)}
+              />
+              <Stat
+                label="Соединений"
+                value={metrics.connections == null ? "—" : count(metrics.connections)}
+              />
             </dl>
           </section>
           {worker.provisioning_mode === "ssh" ? (

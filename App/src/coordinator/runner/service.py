@@ -144,6 +144,10 @@ class Runner:
                 "Binds": [f"lab-videos-{spec.name}:/data/videos", "coord-tls-ca:/certs:ro"],
                 "NetworkMode": self.network,
                 "Privileged": False,
+                # Корень только для чтения, запись — в том и /tmp; лимит процессов.
+                "ReadonlyRootfs": True,
+                "Tmpfs": {"/tmp": "rw,noexec,nosuid,size=64m"},
+                "PidsLimit": 256,
             },
         })
         await self.docker.start(container_id)
@@ -175,6 +179,7 @@ class Runner:
                 ],
                 "NetworkMode": self.network,
                 "Privileged": False,
+                "PidsLimit": 256,
             },
         })
         await self.docker.start(container_id)

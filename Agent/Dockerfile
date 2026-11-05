@@ -24,8 +24,10 @@ USER agent
 
 VOLUME ["/data/videos"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["python", "-m", "agent", "check-config", "-c", "/etc/agent/agent.yaml"]
+# doctor проверяет не только конфиг, но и том, свободное место и связь с координатором
+# (план №1, раздел 2.2). При недоступном координаторе контейнер честно становится unhealthy.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 \
+    CMD ["python", "-m", "agent", "doctor", "-c", "/etc/agent/agent.yaml"]
 
 ENTRYPOINT ["python", "-m", "agent"]
 CMD ["run", "--config", "/etc/agent/agent.yaml"]

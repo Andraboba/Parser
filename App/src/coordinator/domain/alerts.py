@@ -36,6 +36,12 @@ class WorkerSnapshot:
     container_state: str | None = None
     restart_count: int = 0
     oom_killed: bool = False
+    # Дополнительные метрики cgroup из extra: своп, дисковый I/O, файлы, соединения.
+    swap_used_bytes: int | None = None
+    disk_read_bps: int | None = None
+    disk_write_bps: int | None = None
+    open_files: int | None = None
+    connections: int | None = None
 
 
 @dataclass(frozen=True)

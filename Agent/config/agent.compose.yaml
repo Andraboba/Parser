@@ -20,8 +20,9 @@ coordinator:
 
 limits:
   rps: 10
-  max_connections: 8
-  check_concurrency: 4
+  max_connections: 32
+  # Потолок не ниже максимального числа потоков узла (worker-02 = 16).
+  check_concurrency: 16
   download_concurrency: 2
 
 retry:

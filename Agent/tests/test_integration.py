@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Сквозная проверка: агент + заглушка координатора + мок-сайт."""
 
 from __future__ import annotations
@@ -81,9 +81,13 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(statuses.get(100), "not_found")
         self.assertEqual(statuses.get(101), "forbidden")
         self.assertEqual(statuses.get(102), "rate_limited")
-        self.assertEqual(statuses.get(103), "retry_wait")
+        # 5xx повторяется max_retries раз, затем становится окончательной ошибкой.
+        self.assertEqual(statuses.get(103), "failed")
         self.assertEqual(statuses.get(104), "not_found")
         self.assertEqual(statuses.get(105), "completed")
+        self.assertEqual(
+            sum(1 for _, path in self.site.requests if path == "/page/103"), 3,
+        )
 
         completed = self.coordinator.completed[0]
         self.assertEqual(completed["next_id"], 106)
@@ -99,7 +103,30 @@ class IntegrationTests(unittest.TestCase):
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         self.assertEqual(metadata["title"], "Материал 105")
         self.assertEqual(metadata["status"], "completed")
+        self.assertEqual(metadata["server_name"], "worker-test")
+        self.assertEqual(metadata["local_path"], metadata["file"]["path"])
         self.assertIn("sha256", metadata["file"])
+
+    def test_job_retry_setting_overrides_config(self) -> None:
+        self.coordinator.chunk.update(
+            range_start=103, range_end=103, next_id=103, max_retries=0,
+        )
+        runtime = AgentRuntime(self.config)
+        self.assertEqual(runtime.run(once=True), 0)
+        self.assertEqual(self.coordinator.statuses().get(103), "failed")
+        self.assertEqual(
+            sum(1 for _, path in self.site.requests if path == "/page/103"), 1,
+        )
+
+    def test_progress_snapshot_tracks_current_items(self) -> None:
+        runtime = AgentRuntime(self.config)
+        runtime._begin_item(7)
+        runtime._update_item(7, title="Материал 7", status="downloading")
+        snapshot = runtime._progress_snapshot()
+        self.assertEqual(snapshot["active_checks"], 1)
+        self.assertEqual(snapshot["current_items"][0]["title"], "Материал 7")
+        runtime._end_item(7)
+        self.assertEqual(runtime._progress_snapshot()["active_checks"], 0)
 
     def test_no_work_left(self) -> None:
         self.coordinator.chunk = dict(self.coordinator.chunk)  # копия без изменений

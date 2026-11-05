@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,15 @@ def guess_extension(mime: str | None, url: str) -> str:
     return ".bin"
 
 
+def _range_start(value: str | None) -> int | None:
+    """Начало диапазона из `Content-Range: bytes 100-199/200`."""
+    if not value:
+        return None
+    head = value.strip().split(None, 1)[-1]
+    start = head.split("-", 1)[0].strip()
+    return int(start) if start.isdigit() else None
+
+
 def _hash_file(path: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     size = 0
@@ -105,10 +115,13 @@ class Downloader:
         item_id: int,
         expected_size: int | None = None,
         mime: str | None = None,
+        progress: Callable[[int], None] | None = None,
     ) -> DownloadResult:
         finished = self.storage.existing_video(item_id)
         if finished is not None:
             digest, size = _hash_file(finished)
+            if progress is not None:
+                progress(size)
             return DownloadResult(
                 path=finished,
                 size=size,
@@ -117,7 +130,9 @@ class Downloader:
                 skipped=True,
                 mime=mime,
             )
-        return self._download_once(url, item_id, expected_size, mime, retry_on_range_error=True)
+        return self._download_once(
+            url, item_id, expected_size, mime, retry_on_range_error=True, progress=progress,
+        )
 
     # ------------------------------------------------------------------
     def _download_once(
@@ -127,6 +142,7 @@ class Downloader:
         expected_size: int | None,
         mime: str | None,
         retry_on_range_error: bool,
+        progress: Callable[[int], None] | None = None,
     ) -> DownloadResult:
         paths = self.storage.ensure(item_id)
         partial = paths.partial
@@ -155,7 +171,9 @@ class Downloader:
                     partial.unlink()
                 except OSError:
                     pass
-                return self._download_once(url, item_id, expected_size, mime, False)
+                return self._download_once(
+                    url, item_id, expected_size, mime, False, progress=progress,
+                )
 
             if status in (401, 403):
                 raise DownloadError("доступ к файлу запрещён", error_class="forbidden")
@@ -169,6 +187,23 @@ class Downloader:
                 raise DownloadError(f"неожидаемый статус {status}", error_class="http_error")
 
             mime = mime or response.header("content-type")
+            if status == 206 and existing > 0:
+                # Продолжаем только с того места, которое просили. Иначе сервер
+                # отдаёт другой диапазон, и склейка дала бы битый файл.
+                start = _range_start(response.header("content-range"))
+                if start != existing:
+                    response.close()
+                    if retry_on_range_error:
+                        try:
+                            partial.unlink()
+                        except OSError:
+                            pass
+                        return self._download_once(
+                            url, item_id, expected_size, mime, False, progress=progress,
+                        )
+                    raise DownloadError(
+                        "сервер вернул неверный диапазон Range", error_class="range_mismatch",
+                    )
             resumed = status == 206 and existing > 0
             if status == 200:
                 existing = 0  # сервер отдаёт файл целиком, начинаем с нуля
@@ -207,6 +242,8 @@ class Downloader:
                             raise InsufficientSpace("на диске заканчивается место")
                     handle.write(chunk)
                     digest.update(chunk)
+                    if progress is not None:
+                        progress(written)
                 handle.flush()
                 os.fsync(handle.fileno())
         finally:

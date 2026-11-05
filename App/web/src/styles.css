@@ -137,6 +137,31 @@ main {
   gap: 12px;
 }
 
+.worker-choice {
+  display: flex;
+  flex: 1 1 240px;
+  align-items: center;
+  gap: 8px;
+}
+
+.worker-choice label {
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.worker-choice input[type="checkbox"] {
+  width: auto;
+}
+
+.worker-choice input[type="number"] {
+  flex: 0 0 92px;
+  width: 92px;
+}
+
 label {
   display: flex;
   flex: 1 1 160px;

@@ -45,6 +45,9 @@ class Chunk:
     next_id: int
     deadline: float
     rps_share: float | None = None
+    # Параметры задания из lease: тайм-аут проверки и число повторов.
+    request_timeout_seconds: float | None = None
+    max_retries: int | None = None
 
     @property
     def size(self) -> int:
@@ -64,6 +67,8 @@ class Chunk:
             next_id=self.next_id,
             deadline=base + seconds,
             rps_share=self.rps_share,
+            request_timeout_seconds=self.request_timeout_seconds,
+            max_retries=self.max_retries,
         )
 
 
@@ -172,6 +177,7 @@ class CoordinatorClient:
         if status == 204 or not data:
             return None
         ttl = float(data.get("lease_ttl") or ttl_hint or self.config.lease_ttl)
+        max_retries = data.get("max_retries")
         return Chunk(
             chunk_id=int(data["chunk_id"]),
             job_id=int(data.get("job_id", 0)),
@@ -180,6 +186,8 @@ class CoordinatorClient:
             next_id=int(data.get("next_id", data["range_start"])),
             deadline=time.monotonic() + ttl,
             rps_share=_optional_float(data.get("rps_share")),
+            request_timeout_seconds=_optional_float(data.get("request_timeout_seconds")),
+            max_retries=int(max_retries) if max_retries is not None else None,
         )
 
     def progress(
