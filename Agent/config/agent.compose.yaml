@@ -1,0 +1,44 @@
+# Конфигурация для запуска в docker compose.
+# Отличия от примера: адрес координатора — имя сервиса, имя узла и число
+# потоков приходят из окружения, каталог данных — том контейнера.
+
+agent:
+  name: worker
+  threads: 4
+  storage_path: /data/videos
+  state_dir: /data/videos/.agent
+  min_free_space_gb: 1
+  log_level: INFO
+  log_json: true
+
+coordinator:
+  base_url: http://coordinator:8000
+  token: ${AGENT_TOKEN}
+  heartbeat_interval: 5
+  lease_ttl: 60
+  poll_interval: 2
+
+limits:
+  rps: 10
+  max_connections: 8
+  check_concurrency: 4
+  download_concurrency: 2
+
+retry:
+  max_retries: 4
+  base_delay: 1.0
+  max_delay: 30
+  jitter: 0.3
+
+site_adapter:
+  page_url_template: "http://kinescope.io/{id}"
+  request_timeout_seconds: 20
+  user_agent: "lab-agent/1.0 (educational project)"
+  follow_redirects: false
+  allowed_redirect_hosts: []
+  missing_markers:
+    - "страница не найдена"
+    - "not found"
+  download:
+    policy: public_only
+    max_file_size_bytes: 2147483648

@@ -1,0 +1,8 @@
+**/__pycache__
+**/*.pyc
+.tmp/
+.pytest_cache/
+.mypy_cache/
+data/
+*.log
+_test_out.txt

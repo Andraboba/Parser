@@ -1,0 +1,85 @@
+# Стенд из трёх контейнеров-агентов.
+#
+# «Рабочие серверы» из ТЗ заменены контейнерами на одном хосте: это дешевле
+# и позволяет показывать отказы командой docker stop. Лимиты у сервисов
+# разные — так имитируется разная мощность узлов.
+
+x-agent: &agent
+  build: .
+  image: lab/agent:1.0.0
+  command: ["run", "--config", "/etc/agent/agent.yaml"]
+  environment:
+    AGENT_COORDINATOR_URL: http://coordinator:8000
+    AGENT_TOKEN: ${AGENT_TOKEN:-dev-token}
+    AGENT_IMAGE: lab/agent:1.0.0
+  volumes:
+    - ./config/agent.compose.yaml:/etc/agent/agent.yaml:ro
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  networks:
+    - lab
+  labels:
+    lab.role: agent
+
+services:
+  worker-01:
+    <<: *agent
+    environment:
+      AGENT_COORDINATOR_URL: http://coordinator:8000
+      AGENT_TOKEN: ${AGENT_TOKEN:-dev-token}
+      AGENT_NAME: worker-01
+      AGENT_THREADS: "8"
+      AGENT_IMAGE: lab/agent:1.0.0
+    volumes:
+      - videos-01:/data/videos
+      - ./config/agent.compose.yaml:/etc/agent/agent.yaml:ro
+    cpus: "1.0"
+    mem_limit: 512m
+    labels:
+      lab.role: agent
+      lab.worker: worker-01
+
+  worker-02:
+    <<: *agent
+    environment:
+      AGENT_COORDINATOR_URL: http://coordinator:8000
+      AGENT_TOKEN: ${AGENT_TOKEN:-dev-token}
+      AGENT_NAME: worker-02
+      AGENT_THREADS: "16"
+      AGENT_IMAGE: lab/agent:1.0.0
+    volumes:
+      - videos-02:/data/videos
+      - ./config/agent.compose.yaml:/etc/agent/agent.yaml:ro
+    cpus: "2.0"
+    mem_limit: 1g
+    labels:
+      lab.role: agent
+      lab.worker: worker-02
+
+  worker-03:
+    <<: *agent
+    environment:
+      AGENT_COORDINATOR_URL: http://coordinator:8000
+      AGENT_TOKEN: ${AGENT_TOKEN:-dev-token}
+      AGENT_NAME: worker-03
+      AGENT_THREADS: "2"
+      AGENT_IMAGE: lab/agent:1.0.0
+    volumes:
+      - videos-03:/data/videos
+      - ./config/agent.compose.yaml:/etc/agent/agent.yaml:ro
+    cpus: "0.5"
+    mem_limit: 256m
+    labels:
+      lab.role: agent
+      lab.worker: worker-03
+
+networks:
+  lab:
+    name: lab
+
+volumes:
+  videos-01:
+  videos-02:
+  videos-03:

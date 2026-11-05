@@ -1,0 +1,20 @@
+# Шаблон workflow. Репозиторий находится в родительской папке, поэтому файл нужно
+# скопировать в <корень репозитория>/.github/workflows/platform-ci.yml.
+name: platform-ci
+
+on:
+  push:
+    paths: ["App/**"]
+  pull_request:
+    paths: ["App/**"]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: App
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint, migrations, tests
+        run: bash scripts/ci.sh

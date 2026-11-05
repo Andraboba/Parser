@@ -1,0 +1,58 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- остатки pip-сборки ---
+pip-build-env-*/
+pip-build-tracker-*/
+pip-install-*/
+pip-ephem-wheel-cache-*/
+
+# --- Node ---
+node_modules/
+
+# --- временные каталоги и результаты прогонов ---
+.tmp/
+.tmp2/
+data/
+*.tmp
+*.log
+_test_out.txt
+_demo_out.txt
+_cfg_out.txt
+_t.txt
+
+# --- служебные каталоги инструментов ---
+.acl-recovery/
+.dsh-office-*/
+
+# --- IDE и ОС ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- временные файлы Office ---
+~$*
+
+# --- секреты и локальные настройки ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lab-agent"
+version = "1.0.0"
+description = "Агент рабочего узла: проверка идентификаторов и загрузка видеоматериалов"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Лабораторная работа №1" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+agentctl = "agent.cli:main"
+
+[tool.setuptools]
+packages = ["agent"]
+
+[tool.setuptools.package-data]
+agent = ["py.typed"]

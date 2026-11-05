@@ -1,0 +1,74 @@
+# Стенд одной командой: docker compose up -d --build
+name: coord
+
+x-app-env: &app-env
+  COORD_DATABASE_URL: postgresql+psycopg://coord:coord@db:5432/coord
+  COORD_REDIS_URL: redis://redis:6379/0
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: coord
+      POSTGRES_PASSWORD: coord
+      POSTGRES_DB: coord
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coord -d coord"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
+  migrate:
+    build: { context: ., dockerfile: deploy/Dockerfile, target: runtime }
+    image: coord/platform:dev
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-env
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    image: coord/platform:dev
+    environment: *app-env
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
+
+  # Линтер и тесты: docker compose --profile ci run --rm tests
+  tests:
+    profiles: [ci]
+    build: { context: ., dockerfile: deploy/Dockerfile, target: dev }
+    image: coord/platform:dev-tests
+    environment: *app-env
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    command: ["pytest", "-q"]
+
+volumes:
+  pgdata:

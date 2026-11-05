@@ -1,0 +1,54 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node / фронт
+node_modules/
+web/dist/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Секреты и локальные настройки (шаблон .env.example коммитим)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Данные стенда: тома, загруженные файлы, дампы
+data/
+videos/
+*.dump
+*.sql.gz
+
+# Логи
+*.log
+logs/
+
+# IDE и ОС
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Временные файлы Office (~$ПЛАН_2_Платформа.docx и т. п.)
+~$*
+
+# Локальные настройки Claude Code
+.claude/settings.local.json

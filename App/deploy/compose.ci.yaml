@@ -1,0 +1,8 @@
+# Оверлей для scripts/ci.sh: убирает публикацию портов, чтобы CI не мешал рабочему стенду.
+services:
+  db:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  api:
+    ports: !reset []

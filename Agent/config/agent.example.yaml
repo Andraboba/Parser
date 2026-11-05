@@ -1,0 +1,52 @@
+# Конфигурация агента рабочего узла.
+# Любое значение можно переопределить переменной окружения (см. README):
+# AGENT_NAME, AGENT_THREADS, AGENT_STORAGE_PATH, AGENT_COORDINATOR_URL,
+# AGENT_TOKEN, AGENT_RPS, AGENT_SITE_TEMPLATE, AGENT_LOG_LEVEL.
+
+agent:
+  name: worker-01
+  threads: 8                 # сколько идентификаторов проверять параллельно
+  storage_path: /data/videos
+  state_dir: /data/videos/.agent
+  min_free_space_gb: 2       # ниже этого порога новые загрузки не начинаются
+  log_level: INFO
+  log_json: true             # JSON в stdout — удобно для docker logs
+  metrics_interval: 5
+
+coordinator:
+  base_url: http://coordinator:8000
+  token: ${AGENT_TOKEN}      # подставляется из окружения
+  protocol_version: 1
+  request_timeout: 10
+  heartbeat_interval: 5
+  lease_ttl: 60              # не меньше двух интервалов heartbeat
+  poll_interval: 2           # пауза, если работы пока нет
+
+limits:
+  rps: 20                    # локальный предохранитель; основной лимит выдаёт координатор
+  max_connections: 16
+  check_concurrency: 4       # потолок параллельных проверок
+  download_concurrency: 2    # потолок одновременных загрузок
+
+retry:
+  max_retries: 4
+  base_delay: 1.0
+  max_delay: 30
+  jitter: 0.3
+
+site_adapter:
+  name: target-video-http
+  page_url_template: "http://kinescope.io/{id}"
+  request_timeout_seconds: 20
+  user_agent: "lab-agent/1.0 (educational project)"
+  follow_redirects: false
+  allowed_redirect_hosts: []
+  found_markers: []
+  missing_markers:
+    - "страница не найдена"
+    - "page not found"
+    - "not found"
+  download:
+    policy: public_only      # public_only | never
+    max_file_size_bytes: 2147483648
+  headers: {}
