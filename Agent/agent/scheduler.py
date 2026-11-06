@@ -570,6 +570,12 @@ class AgentRuntime:
             if check.status == STATUS_FOUND:
                 metadata = check.as_metadata()
                 metadata["file"] = file_info
+                if file_info:
+                    # У HLS тип страницы (m3u8) не совпадает с типом файла.
+                    if file_info.get("mime"):
+                        metadata["mime_type"] = file_info["mime"]
+                    if file_info.get("size"):
+                        metadata["size"] = file_info["size"]
                 metadata["status"] = status
                 metadata["error_class"] = error_class
                 metadata["server_name"] = self.config.name

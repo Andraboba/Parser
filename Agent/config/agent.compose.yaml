@@ -32,14 +32,17 @@ retry:
   jitter: 0.3
 
 site_adapter:
-  page_url_template: "http://kinescope.io/{id}"
+  page_url_template: "https://kinescope.io/{id}"
   request_timeout_seconds: 20
   user_agent: "lab-agent/1.0 (educational project)"
-  follow_redirects: false
-  allowed_redirect_hosts: []
+  # Kinescope отвечает 308 на числовой адрес и ведёт на канонический.
+  follow_redirects: true
+  allowed_redirect_hosts:
+    - "kinescope.io"
   missing_markers:
     - "страница не найдена"
     - "not found"
   download:
     policy: public_only
+    prefer: direct           # direct — mp4 со звуком, hls — сегменты без звука
     max_file_size_bytes: 2147483648

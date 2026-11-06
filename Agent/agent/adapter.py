@@ -65,6 +65,8 @@ _SCRIPT_JSON_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _SIZE_RE = re.compile(r"""["'](?:size|fileSize|file_size|contentLength)["']\s*:\s*(\d{3,})""")
+# Ссылка на каталог прямых файлов в playerOptions (Kinescope).
+_DOWNLOAD_LINK_RE = re.compile(r'"downloadLink"\s*:\s*"([^"]+)"')
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -220,6 +222,15 @@ class SiteAdapter:
         marked_found = any(marker.lower() in lowered for marker in self.config.found_markers if marker)
         marked_missing = any(marker.lower() in lowered for marker in self.config.missing_markers if marker)
 
+        prefer = self.config.download.prefer
+        direct: tuple[str, str] | None = None
+        direct_checked = False
+        if prefer == "direct":
+            direct_checked = True
+            direct = self._direct_asset(html, url)
+            if direct is not None:
+                return self._direct_result(item_id, url, status, title, direct)
+
         if candidate_urls:
             download_url = candidate_urls[0]
             mime = headers.get("content-type", "").split(";")[0].strip() or None
@@ -236,6 +247,12 @@ class SiteAdapter:
                 mime=mime or _suffix_mime(download_url),
                 adapter_version=self.version,
             )
+
+        if direct is None and not direct_checked:
+            # HLS-ссылки на странице нет: пробуем прямой каталог файлов.
+            direct = self._direct_asset(html, url)
+            if direct is not None:
+                return self._direct_result(item_id, url, status, title, direct)
 
         if marked_found and not marked_missing:
             # материал есть, но ссылка на файл не найдена — скачивать нечего
@@ -257,6 +274,114 @@ class SiteAdapter:
             error_class="no_material" if not marked_missing else None,
             adapter_version=self.version,
         )
+
+    # ------------------------------------------------------------------
+    def _direct_result(
+        self,
+        item_id: int,
+        url: str,
+        status: int,
+        title: str | None,
+        direct: tuple[str, str],
+    ) -> CheckResult:
+        """Результат по прямой ссылке: размер узнает загрузчик из Content-Length.
+
+        В каталоге Kinescope поле size описывает только видео-дорожку, а файл
+        отдаётся вместе со звуком и весит больше, поэтому размер не фиксируем.
+        """
+        download_url, mime = direct
+        return CheckResult(
+            item_id=item_id,
+            status=STATUS_FOUND,
+            page_url=url,
+            http_status=status,
+            title=title,
+            download_url=download_url,
+            size=None,
+            mime=mime,
+            adapter_version=self.version,
+        )
+
+    def _direct_asset(self, html: str, page_url: str) -> tuple[str, str] | None:
+        """Взять лучший mp4 из download-links.json (там есть звук)."""
+        match = _DOWNLOAD_LINK_RE.search(html)
+        if match is None:
+            return None
+        link = urljoin(page_url, _unescape(match.group(1)))
+        try:
+            status, _headers, body = self.http.get(
+                link,
+                headers={"Accept": "application/json"},
+                timeout=self.config.request_timeout_seconds,
+                follow_redirects=self.config.follow_redirects,
+                allowed_hosts=self.config.allowed_redirect_hosts,
+            )
+        except NetworkError:
+            return None
+        if status != 200:
+            return None
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        assets = data.get("assets") if isinstance(data, dict) else None
+        if not isinstance(assets, list):
+            return None
+
+        limit = self.config.download.max_file_size_bytes
+        candidates: list[tuple[int, int, str]] = []
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            asset_url = asset.get("url")
+            if not isinstance(asset_url, str) or not asset_url.startswith(("http://", "https://")):
+                continue
+            name = str(asset.get("download_filename") or "").lower()
+            if not name.endswith(".mp4"):
+                continue
+            try:
+                asset_size = int(asset.get("size") or 0)
+            except (TypeError, ValueError):
+                asset_size = 0
+            candidates.append(
+                (_quality_rank(str(asset.get("quality") or "")), asset_size, asset_url)
+            )
+        candidates.sort(key=lambda item: item[0], reverse=True)
+
+        # Поле size в каталоге Kinescope описывает только видео-дорожку,
+        # поэтому фактический размер проверяем по Content-Length.
+        for _rank, asset_size, asset_url in candidates:
+            actual = self._asset_size(asset_url)
+            if actual is not None:
+                if actual > limit:
+                    continue
+                return asset_url, "video/mp4"
+            if asset_size and asset_size > limit:
+                continue
+            return asset_url, "video/mp4"
+        return None
+
+    def _asset_size(self, url: str) -> int | None:
+        """Фактический размер файла из Content-Length без скачивания тела."""
+        try:
+            response = self.http.request(
+                "GET", url, headers={"Range": "bytes=0-0"},
+                timeout=self.config.request_timeout_seconds,
+            )
+        except NetworkError:
+            return None
+        try:
+            if response.status not in (200, 206):
+                return None
+            if response.status == 206:
+                # Сервер честно ответил на Range: полный размер в Content-Range.
+                total = (response.header("content-range") or "").rsplit("/", 1)[-1].strip()
+                if total.isdigit():
+                    return int(total)
+            length = response.content_length()
+            return length if length and length > 0 else None
+        finally:
+            response.close()
 
     # ------------------------------------------------------------------
     def _extract_title(self, html: str) -> str | None:
@@ -328,6 +453,15 @@ class SiteAdapter:
 
 
 # --------------------------------------------------------------------------
+def _quality_rank(value: str) -> int:
+    """«1080p» -> 1080, «original» -> максимум; незнакомое — 0."""
+    text = value.strip().lower()
+    if text in ("original", "source"):
+        return 100000
+    match = re.search(r"(\d{3,4})", text)
+    return int(match.group(1)) if match else 0
+
+
 def _suffix_mime(url: str) -> str | None:
     path = urlsplit(url).path.lower()
     for suffix, mime in _VIDEO_MIME_BY_SUFFIX.items():

@@ -87,8 +87,10 @@ python -m agent run -c config/agent.yaml
 | `limits.check_concurrency` / `download_concurrency` | потолки параллельности |
 | `retry.*` | повторы: число попыток, базовая задержка, потолок, джиттер |
 | `site_adapter.page_url_template` | шаблон адреса страницы, обязан содержать `{id}` |
+| `site_adapter.follow_redirects` / `allowed_redirect_hosts` | следовать редиректам (Kinescope отвечает 308) только на разрешённые хосты |
 | `site_adapter.found_markers` / `missing_markers` | признаки наличия и отсутствия материала |
 | `site_adapter.download.policy` | `public_only` — скачивать публичное, `never` — только собирать метаданные |
+| `site_adapter.download.prefer` | `direct` — mp4 из `download-links` (со звуком), `hls` — сборка сегментов (у Kinescope без звука) |
 | `site_adapter.download.max_file_size_bytes` | предел размера файла |
 
 Секреты в файл не пишутся: `token: ${AGENT_TOKEN}` подставляется из окружения.
@@ -158,7 +160,11 @@ docker compose logs -f worker-01
 
 ## Известные ограничения
 
-* HLS-плейлисты не собираются: скачивается только прямой файл (`.mp4` и подобные).
+* HLS-плейлисты собираются: master и media, `EXT-X-MAP`, `EXT-X-BYTERANGE`.
+  Шифрованные (`EXT-X-KEY`) плейлисты отвергаются. Отдельная аудиодорожка HLS
+  (так Kinescope отдаёт звук) не склеивается: HLS-файл получается без звука.
+  Для звука используется `download.prefer: direct`: mp4 из `download-links`
+  содержит и видео, и аудио; HLS остаётся запасным путём.
 * Прокси и клиентские сертификаты не поддерживаются.
 * Сетевые метрики читаются из `/proc/net/dev`, поэтому на Windows равны `null`.
 * Один агент обрабатывает один блок за раз: параллелизм внутри блока, а не

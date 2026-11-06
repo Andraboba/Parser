@@ -73,10 +73,13 @@ class LimitsConfig:
 
 @dataclass(frozen=True)
 class DownloadPolicy:
-    """Что можно скачивать и до какого размера."""
+    """Что можно скачивать, до какого размера и каким путём."""
 
     policy: str = "public_only"
     max_file_size_bytes: int = 2 * 1024 ** 3
+    # direct — прямой mp4 из download-links (со звуком), hls — сборка сегментов
+    # (у Kinescope видео без звука: аудио идёт отдельной дорожкой).
+    prefer: str = "hls"
 
 
 @dataclass(frozen=True)
@@ -260,6 +263,11 @@ def parse_config(data: Mapping[str, Any]) -> AgentConfig:
         raise ConfigError(
             f"site_adapter.download.policy: допустимо {', '.join(_VALID_POLICIES)}, получено «{policy}»"
         )
+    prefer = _get_str(download_section, "prefer", "hls", "site_adapter.download")
+    if prefer not in ("hls", "direct"):
+        raise ConfigError(
+            f"site_adapter.download.prefer: допустимо hls, direct, получено «{prefer}»"
+        )
     max_size = _get_int(
         download_section, "max_file_size_bytes", 2 * 1024 ** 3, "site_adapter.download"
     )
@@ -316,7 +324,7 @@ def parse_config(data: Mapping[str, Any]) -> AgentConfig:
             player_config_path=(
                 _get_str(site, "player_config_path", "", "site_adapter") or None
             ),
-            download=DownloadPolicy(policy=policy, max_file_size_bytes=max_size),
+            download=DownloadPolicy(policy=policy, max_file_size_bytes=max_size, prefer=prefer),
             headers=headers,
         ),
     )
@@ -422,6 +430,7 @@ def describe(cfg: AgentConfig) -> dict[str, Any]:
             "name": cfg.site.name,
             "page_url_template": cfg.site.page_url_template,
             "download_policy": cfg.site.download.policy,
+            "download_prefer": cfg.site.download.prefer,
             "max_file_size_bytes": cfg.site.download.max_file_size_bytes,
             "follow_redirects": cfg.site.follow_redirects,
         },

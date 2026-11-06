@@ -84,9 +84,84 @@ function Player({ video, onClose }: { video: Video; onClose: () => void }) {
 }
 
 function Card({ video, onOpen }: { video: Video; onOpen: () => void }) {
+  const holder = useRef<HTMLLIElement>(null);
+  const preview = useRef<HTMLVideoElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [broken, setBroken] = useState(false);
+  const [playing, setPlaying] = useState(false);
+
+  // Превью грузим только когда карточка подходит к экрану: иначе галерея
+  // на 48 записей тянула бы метаданные всех видео сразу.
+  useEffect(() => {
+    const node = holder.current;
+    if (node === null || !video.playable) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [video.playable]);
+
+  const seekStart = (node: HTMLVideoElement | null) => {
+    if (node === null || node.readyState < 1) return;
+    try {
+      node.currentTime = 0.1;
+    } catch {
+      // метаданные ещё не готовы — кадр покажется после loadedmetadata
+    }
+  };
+
+  const start = () => {
+    const node = preview.current;
+    if (node === null) return;
+    seekStart(node);
+    void node
+      .play()
+      .then(() => setPlaying(true))
+      .catch(() => setPlaying(false));
+  };
+
+  const stop = () => {
+    const node = preview.current;
+    setPlaying(false);
+    if (node === null) return;
+    node.pause();
+    seekStart(node);
+  };
+
   return (
-    <li className="video-card">
-      <button type="button" className="video-thumb" onClick={onOpen} aria-label={`Смотреть: ${video.title ?? video.file_name}`}>
+    <li className="video-card" ref={holder}>
+      <button
+        type="button"
+        className={`video-thumb${playing ? " is-playing" : ""}`}
+        onClick={onOpen}
+        onMouseEnter={start}
+        onMouseLeave={stop}
+        onFocus={start}
+        onBlur={stop}
+        aria-label={`Смотреть: ${video.title ?? video.file_name}`}
+      >
+        {visible && video.playable && !broken && (
+          <video
+            ref={preview}
+            className="video-preview"
+            src={`${videoUrl(video.id)}#t=0.1`}
+            preload="metadata"
+            muted
+            playsInline
+            loop
+            onError={() => setBroken(true)}
+            onLoadedMetadata={(event) => {
+              event.currentTarget.currentTime = 0.1;
+            }}
+          />
+        )}
         <span className="video-play" aria-hidden="true">
           ▶
         </span>

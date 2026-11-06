@@ -32,11 +32,15 @@ site_adapter:
   page_url_template: "http://site:8081/page/{id}"
   request_timeout_seconds: 20
   user_agent: "lab-agent/1.0 (educational project)"
-  follow_redirects: false
-  allowed_redirect_hosts: []
+  # Kinescope отвечает 308 на числовой адрес и ведёт на канонический.
+  follow_redirects: true
+  allowed_redirect_hosts:
+    - "kinescope.io"
   missing_markers:
     - "страница не найдена"
     - "not found"
   download:
     policy: public_only
+    # direct — mp4 из download-links (со звуком), hls — сборка сегментов без звука.
+    prefer: direct
     max_file_size_bytes: 104857600

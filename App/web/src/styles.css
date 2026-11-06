@@ -672,11 +672,23 @@ details.card summary {
   width: 100%;
   aspect-ratio: 16 / 9;
   padding: 0;
+  overflow: hidden;
   background: linear-gradient(135deg, var(--running-bg), var(--track));
   border: 0;
   border-radius: 0;
   color: var(--running-text);
   cursor: pointer;
+}
+
+/* Кадр из самого видео: грузится только для видимых карточек. */
+.video-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: var(--track);
+  pointer-events: none;
 }
 
 .video-thumb:hover .video-play,
@@ -685,6 +697,8 @@ details.card summary {
 }
 
 .video-play {
+  position: relative;
+  z-index: 1;
   display: grid;
   place-items: center;
   width: 52px;
@@ -693,11 +707,18 @@ details.card summary {
   background: var(--surface);
   border-radius: 50%;
   font-size: 20px;
-  transition: transform 0.15s ease;
+  opacity: 0.9;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+/* Во время проигрывания превью иконка не мешает кадру. */
+.video-thumb.is-playing .video-play {
+  opacity: 0;
 }
 
 .video-format {
   position: absolute;
+  z-index: 1;
   right: 8px;
   bottom: 8px;
   padding: 1px 6px;
