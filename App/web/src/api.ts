@@ -102,6 +102,7 @@ export interface NewServer {
   ssh_port: number;
   ssh_user: string;
   ssh_key: string;
+  ssh_password?: string | null;
   threads: number;
   storage_path: string;
   min_free_space_gb: number | null;
@@ -414,3 +415,36 @@ export const listItems = (id: number, filter: ItemFilter, afterId?: number) =>
 export const itemsCsvUrl = (id: number, filter: ItemFilter) =>
   `/api/jobs/${id}/items.csv${query(filter)}`;
 export const jobErrors = (id: number) => request<ErrorSummary[]>(`/jobs/${id}/errors`);
+
+export interface Video {
+  id: number;
+  job_id: number;
+  external_id: number;
+  title: string | null;
+  page_url: string | null;
+  mime: string | null;
+  size: number;
+  file_name: string;
+  worker: string | null;
+  created_at: string;
+  playable: boolean;
+}
+
+export interface VideosPage {
+  items: Video[];
+  total: number;
+  next_before_id: number | null;
+}
+
+export interface VideoFilter {
+  q?: string;
+  job_id?: string;
+  worker?: string;
+}
+
+export const listVideos = (filter: VideoFilter, beforeId?: number) =>
+  request<VideosPage>(`/videos${query({ ...filter, before_id: beforeId, limit: 48 })}`);
+export const videoUrl = (id: number, download = false) =>
+  `/api/videos/${id}/content${download ? "?download=true" : ""}`;
+export const authorizeServer = (id: number, password: string) =>
+  post<{ ok: boolean }>(`/workers/${id}/agent/authorize`, { password });

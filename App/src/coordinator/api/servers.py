@@ -15,7 +15,12 @@ from coordinator.api.deps import (
     require_operator,
 )
 from coordinator.api.schemas import WorkerOut
-from coordinator.errors import HostNotAllowed, InvalidServer, ServerExists, WorkerNotFound
+from coordinator.errors import (
+    HostNotAllowed,
+    InvalidServer,
+    ServerExists,
+    WorkerNotFound,
+)
 from coordinator.runner_client import RunnerClient, RunnerRejected
 from coordinator.storage import events, workers
 from coordinator.storage.models import Worker
@@ -36,6 +41,8 @@ class ServerCreate(BaseModel):
     ssh_user: str = Field(default="agent", pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
     # Имя секрета в хранилище, а не сам ключ (ТЗ, п. 11.4).
     ssh_key: str = Field(default="ssh_client_key", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    # Пароль только для первого входа; после него координатор ставит свой ключ.
+    ssh_password: str | None = Field(default=None, min_length=1, max_length=256)
     threads: int = Field(default=4, ge=1, le=1000)
     storage_path: str = Field(default="/data/videos", pattern=r"^/[^\x00]{0,1023}$")
     min_free_space_gb: float | None = Field(default=None, ge=0)
@@ -57,6 +64,10 @@ class DeployRequest(BaseModel):
     agent_kind: str | None = Field(default=None, pattern=r"^(real|stub)$")
 
 
+class AuthorizeRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
 class AgentLogs(BaseModel):
     logs: str
 
@@ -71,6 +82,13 @@ class ServerCheck(BaseModel):
     kernel: str | None = None
     error: str | None = None
     error_code: str | None = None
+
+
+def _host_allowed(host: str, patterns: list[str]) -> bool:
+    """Имена — по allowlist, настоящая машина по IP — разрешена администратору."""
+    return provisioning.is_ip_address(host) or any(
+        fnmatch.fnmatchcase(host, pattern) for pattern in patterns
+    )
 
 
 def _runner(request: Request) -> RunnerClient:
@@ -112,9 +130,18 @@ async def create_server(
             "key_ref": body.ssh_key,
         })
         host = created["host"]
-    elif not any(fnmatch.fnmatchcase(host, p) for p in settings.ssh_host_patterns()):
+    elif host is None or not _host_allowed(host, settings.ssh_host_patterns()):
         # Подключение всё равно запретит runner. Здесь отказ сразу и без мёртвой строки в базе.
-        raise HostNotAllowed(f"адрес {host} вне разрешённых, см. COORD_SSH_ALLOWED_HOSTS")
+        raise HostNotAllowed(
+            f"адрес {host or '—'} вне разрешённых, см. COORD_SSH_ALLOWED_HOSTS"
+        )
+    if body.ssh_password and not body.create_container:
+        # Вход по паролю один раз: ставим ключ координатора, дальше только он.
+        # Неверный пароль — отказ сразу, без строки в базе. Пароль нигде не сохраняется.
+        await runner.call("POST", "/ssh/authorize", json={"target": {
+            "host": host, "port": body.ssh_port, "user": body.ssh_user,
+            "key_ref": body.ssh_key, "password": body.ssh_password,
+        }})
     worker = Worker(
         name=body.name, provisioning_mode=provisioning.SSH_MODE, ssh_host=host,
         ssh_port=body.ssh_port, ssh_user=body.ssh_user, ssh_key_ref=body.ssh_key,
@@ -210,6 +237,22 @@ async def deploy_agent(
         502, "update_rolled_back",
         f"новый агент на {worker.name} не зарегистрировался, возвращена прежняя версия",
     )
+
+
+@router.post("/workers/{worker_id}/agent/authorize", dependencies=ADMIN)
+async def authorize_server(
+    body: AuthorizeRequest, worker: ServerDep, session: SessionDep, runner: RunnerDep,
+) -> dict[str, bool]:
+    """Сервер отклоняет ключ (переустановлен, ключ стёрт): войти по паролю и поставить заново."""
+    await runner.call("POST", "/ssh/authorize", json={
+        "target": provisioning.target_of(worker, body.password),
+    })
+    await events.emit(
+        session, "server.authorize", "ok", f"{worker.name}: установлен ключ координатора",
+        component="runner", worker_id=worker.id,
+    )
+    await session.commit()
+    return {"ok": True}
 
 
 @router.post("/workers/{worker_id}/agent/forget-host-key", dependencies=ADMIN)

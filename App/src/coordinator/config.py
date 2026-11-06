@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     runner_network: str = "coord_default"
     # Куда стучатся агенты: через nginx и TLS, порт api наружу не открыт.
     agent_coordinator_url: str = "https://web"
+    # Адрес для агентов на настоящих машинах (сервер добавлен по IP): https://web им не виден.
+    agent_public_url: str = ""
     image_update_timeout: int = 45
     # Серверы с агентами по SSH. Ключи только у runner-а, в настройках их имена.
     ssh_key_dir: str = "/run/secrets"

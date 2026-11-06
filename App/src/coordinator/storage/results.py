@@ -216,3 +216,74 @@ async def error_summary(session: AsyncSession, job_id: int) -> list[tuple[str, s
         .order_by(func.count().desc())
     )
     return [tuple(row) for row in rows]
+
+
+@dataclass(frozen=True)
+class VideoView:
+    """Загруженный файл для галереи: по одному на элемент, последний сохранённый."""
+
+    file_id: int
+    job_id: int
+    external_id: int
+    title: str | None
+    page_url: str | None
+    mime: str | None
+    size: int
+    storage_path: str
+    worker_id: int | None
+    worker: str | None
+    created_at: object
+
+
+def _videos_query(q: str | None, job_id: int | None, worker: str | None):
+    stmt = (
+        select(
+            File.id, Item.job_id, Item.external_id, MediaMetadata.title, MediaMetadata.page_url,
+            func.coalesce(File.mime, MediaMetadata.mime), File.size, File.storage_path,
+            Download.worker_id, Worker.name, File.created_at,
+        )
+        .join(Download, Download.id == File.download_id)
+        .join(Item, Item.id == Download.item_id)
+        .outerjoin(MediaMetadata, MediaMetadata.item_id == Item.id)
+        .outerjoin(Worker, Worker.id == Download.worker_id)
+    )
+    if job_id is not None:
+        stmt = stmt.where(Item.job_id == job_id)
+    if worker:
+        stmt = stmt.where(Worker.name == worker)
+    if q:
+        # Каждое слово ищется отдельно: «материал 12» найдёт «Материал 1234».
+        for word in q.split()[:8]:
+            condition = or_(
+                MediaMetadata.title.icontains(word, autoescape=True),
+                MediaMetadata.page_url.icontains(word, autoescape=True),
+            )
+            if word.isdecimal() and len(word) < 19:
+                condition = or_(condition, Item.external_id == int(word))
+            stmt = stmt.where(condition)
+    return stmt
+
+
+async def list_videos(
+    session: AsyncSession, *, q: str | None = None, job_id: int | None = None,
+    worker: str | None = None, before_id: int | None = None, limit: int = 48,
+) -> list[VideoView]:
+    """Новые сверху, постранично по id файла."""
+    stmt = _videos_query(q, job_id, worker)
+    if before_id is not None:
+        stmt = stmt.where(File.id < before_id)
+    rows = await session.execute(stmt.order_by(File.id.desc()).limit(limit))
+    return [VideoView(*row) for row in rows]
+
+
+async def count_videos(
+    session: AsyncSession, *, q: str | None = None, job_id: int | None = None,
+    worker: str | None = None,
+) -> int:
+    stmt = _videos_query(q, job_id, worker).subquery()
+    return int(await session.scalar(select(func.count()).select_from(stmt)) or 0)
+
+
+async def get_video(session: AsyncSession, file_id: int) -> VideoView | None:
+    row = (await session.execute(_videos_query(None, None, None).where(File.id == file_id))).first()
+    return VideoView(*row) if row else None

@@ -3,6 +3,7 @@
 Команды выполняет runner, здесь решения: что запускать, какой токен выдать, что делать при сбое.
 """
 import asyncio
+import ipaddress
 import logging
 import secrets
 from typing import Any
@@ -25,18 +26,33 @@ AGENT_STOPPED = "stopped"
 UNKNOWN_STATE = {"worker": None, "id": "—", "image": "—", "restart_count": 0, "oom_killed": False}
 
 
-def target_of(worker: Worker) -> dict[str, Any]:
+def is_ip_address(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def target_of(worker: Worker, password: str | None = None) -> dict[str, Any]:
     if worker.provisioning_mode != SSH_MODE or not worker.ssh_host:
         raise InvalidServer(f"узел {worker.name} управляется не по SSH")
-    return {
+    target = {
         "host": worker.ssh_host, "port": worker.ssh_port or 22,
         "user": worker.ssh_user or "agent", "key_ref": worker.ssh_key_ref or "ssh_client_key",
     }
+    if password:
+        # Пароль живёт только в этом запросе, в Worker и журналы не попадает.
+        target["password"] = password
+    return target
 
 
 def agent_env(worker: Worker, token: str, settings: Settings) -> dict[str, str]:
     """Настройки агента на сервере. Имена для настоящего агента и заглушки разные."""
     url = settings.agent_coordinator_url
+    if settings.agent_public_url and worker.ssh_host and is_ip_address(worker.ssh_host):
+        # Настоящая машина вне сети стенда: имя web она не знает.
+        url = settings.agent_public_url.rstrip("/")
     storage = worker.storage_path or "/data/videos"
     threads = str(worker.desired_threads or worker.threads)
     env = {

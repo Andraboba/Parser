@@ -20,6 +20,7 @@ function AddServerForm({ onCreated }: { onCreated: () => void }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [user, setUser] = useState("agent");
+  const [password, setPassword] = useState("");
   const [key, setKey] = useState("ssh_client_key");
   const [threads, setThreads] = useState("4");
   const [storage, setStorage] = useState("/data/videos");
@@ -41,6 +42,7 @@ function AddServerForm({ onCreated }: { onCreated: () => void }) {
         ssh_port: Number(port),
         ssh_user: user,
         ssh_key: key,
+        ssh_password: !newContainer && password ? password : null,
         threads: Number(threads),
         storage_path: storage,
         min_free_space_gb: reserve ? Number(reserve) : null,
@@ -51,6 +53,7 @@ function AddServerForm({ onCreated }: { onCreated: () => void }) {
       });
       setName("");
       setHost("");
+      setPassword("");
       onCreated();
     } catch (err) {
       setError(errorText(err));
@@ -64,7 +67,9 @@ function AddServerForm({ onCreated }: { onCreated: () => void }) {
       <summary>Добавить сервер</summary>
       <p className="hint">
         Координатор сам войдёт на сервер по SSH, установит и запустит агента. На стенде сервером
-        становится новый контейнер, для настоящей машины снимите отметку и укажите адрес.
+        становится новый контейнер. Для настоящей машины снимите отметку и укажите IP, логин и
+        пароль: по паролю координатор войдёт один раз, поставит свой ключ и дальше работает только
+        с ним, пароль не сохраняется. На сервере нужен Python 3.10 или новее.
       </p>
       <form className="job-form-fields add-worker" onSubmit={submit}>
         <label>
@@ -112,8 +117,13 @@ function AddServerForm({ onCreated }: { onCreated: () => void }) {
         ) : (
           <>
             <label>
-              Адрес
-              <input required value={host} onChange={(e) => setHost(e.target.value)} />
+              IP-адрес
+              <input
+                required
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder="203.0.113.5"
+              />
             </label>
             <label>
               Порт SSH
@@ -129,9 +139,21 @@ function AddServerForm({ onCreated }: { onCreated: () => void }) {
           </>
         )}
         <label>
-          Пользователь
+          Логин
           <input required value={user} onChange={(e) => setUser(e.target.value)} />
         </label>
+        {!newContainer && (
+          <label>
+            Пароль
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Пусто — ключ уже стоит"
+            />
+          </label>
+        )}
         <label>
           Ключ (имя секрета)
           <input required value={key} onChange={(e) => setKey(e.target.value)} />
@@ -169,7 +191,7 @@ function AddServerForm({ onCreated }: { onCreated: () => void }) {
           </select>
         </label>
         <button type="submit" disabled={busy}>
-          Добавить
+          {busy ? "Подключаюсь…" : newContainer ? "Добавить" : "Развернуть агента"}
         </button>
       </form>
       <ErrorMessage text={error} />

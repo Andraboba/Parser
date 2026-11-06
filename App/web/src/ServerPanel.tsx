@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import {
   agentAction,
+  authorizeServer,
   type AgentAction,
   agentLogs,
   checkServer,
@@ -38,6 +39,7 @@ export function ServerPanel({ worker, onDone }: { worker: WorkerNode; onDone: ()
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [logs, setLogs] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
   const state = worker.container_state;
 
   const run = async (work: () => Promise<unknown>, done?: string) => {
@@ -153,6 +155,30 @@ export function ServerPanel({ worker, onDone }: { worker: WorkerNode; onDone: ()
               Сервер заменён: забыть его ключ
             </button>
           )}
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const value = password;
+              void run(async () => {
+                await authorizeServer(worker.id, value);
+                setPassword("");
+              }, "Ключ координатора установлен, дальше вход по ключу.");
+            }}
+          >
+            <input
+              type="password"
+              autoComplete="new-password"
+              required
+              aria-label={`Пароль ${worker.ssh_user ?? "agent"}@${worker.ssh_host}`}
+              placeholder={`Пароль ${worker.ssh_user ?? "agent"}`}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button type="submit" className="button-quiet" disabled={busy}>
+              Войти по паролю и поставить ключ
+            </button>
+          </form>
           {state?.state !== "unreachable" && (
             <a href={`#/workers/${worker.id}/terminal`}>Открыть терминал сервера</a>
           )}

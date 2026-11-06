@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from "./auth";
 import { AuditPage, TokensSection, UsersPage } from "./pages/AdminPages";
 import { DashboardPage } from "./pages/DashboardPage";
 import { EventsPage } from "./pages/EventsPage";
+import { GalleryPage } from "./pages/GalleryPage";
 import { ItemsPage } from "./pages/ItemsPage";
 import { JobPage } from "./pages/JobPage";
 import { JobsPage } from "./pages/JobsPage";
@@ -45,6 +46,7 @@ function Page({ hash }: { hash: string }) {
     return <JobPage key={match[1]} id={Number(match[1])} />;
   }
   if (hash === "#/jobs") return <JobsPage />;
+  if (hash === "#/gallery") return <GalleryPage />;
   if ((match = /^#\/events\/job\/(\d+)$/.exec(hash))) {
     return <EventsPage key={hash} preset={{ job_id: match[1] }} />;
   }
@@ -84,6 +86,7 @@ function Shell({ user, onLogout }: { user: Me; onLogout: () => void }) {
         <nav aria-label="Разделы">
           <NavLink href="#/" active={!section} label="Панель" />
           <NavLink href="#/jobs" active={section === "jobs"} label="Задания" />
+          <NavLink href="#/gallery" active={section === "gallery"} label="Галерея" />
           <NavLink href="#/workers" active={section === "workers"} label="Узлы" />
           <NavLink href="#/events" active={section === "events"} label="Журнал" />
           {isAdmin && <NavLink href="#/audit" active={section === "audit"} label="Аудит" />}

@@ -7,12 +7,13 @@
 import asyncio
 import fnmatch
 import hashlib
+import ipaddress
 import json
 import logging
 import re
 import shlex
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,9 @@ if [ -f "$log" ] && [ "$(wc -c < "$log")" -gt 10485760 ]; then mv "$log" "$log.1
 set -a
 . "$dir/agent.env"
 set +a
+# На настоящей машине пути /certs нет: берём сертификат CA, загруженный вместе с агентом.
+[ -r "${SSL_CERT_FILE:-}" ] || { [ -r "$dir/ca.crt" ] && export SSL_CERT_FILE="$dir/ca.crt"; }
+[ -n "${AGENT_STORAGE_PATH:-}" ] && mkdir -p "$AGENT_STORAGE_PATH" 2>/dev/null
 nohup setsid sh ./run.sh >> "$log" 2>&1 < /dev/null &
 echo $! > "$dir/agent.pid"
 """
@@ -88,10 +92,20 @@ class SshTarget:
     port: int
     user: str
     key_ref: str
+    # Пароль нужен только для первого входа: дальше используется установленный ключ.
+    password: str | None = field(default=None, repr=False)
 
     @property
     def address(self) -> str:
         return f"{self.host}:{self.port}"
+
+
+def is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 def parse_key_value(output: str) -> dict[str, str]:
@@ -136,7 +150,10 @@ class SshManager:
 
     # -- доступ ---------------------------------------------------------------
     def _check_target(self, target: SshTarget) -> None:
-        if not any(fnmatch.fnmatchcase(target.host, p) for p in self.host_patterns):
+        # Администратор может добавить настоящую машину по IP; имена остаются
+        # ограничены allowlist. Это осознанное расширение для авторазвёртывания.
+        if not any(fnmatch.fnmatchcase(target.host, p) for p in self.host_patterns) \
+                and not is_ip_literal(target.host):
             raise SshFailure(403, "host_not_allowed", f"адрес {target.host} вне разрешённых")
 
     def _client_key(self, key_ref: str) -> asyncssh.SSHKey:
@@ -208,13 +225,16 @@ class SshManager:
             try:
                 connection = await asyncssh.connect(
                     target.host, port=target.port, username=target.user,
-                    client_keys=[self._client_key(target.key_ref)],
+                    # С паролем идём только паролем: ключ ещё не установлен.
+                    client_keys=[] if target.password else [self._client_key(target.key_ref)],
+                    password=target.password,
                     known_hosts=([key], [], []), config=None,
                     connect_timeout=CONNECT_TIMEOUT_S, keepalive_interval=15,
                 )
             except asyncssh.PermissionDenied as exc:
+                what = "логин или пароль" if target.password else "ключ"
                 raise SshFailure(
-                    403, "ssh_auth_failed", f"сервер {target.address} отклонил ключ",
+                    403, "ssh_auth_failed", f"сервер {target.address} отклонил {what}",
                 ) from exc
             except (OSError, asyncssh.Error, TimeoutError) as exc:
                 raise SshFailure(
@@ -254,6 +274,41 @@ class SshManager:
         return str(result.stdout)
 
     # -- операции --------------------------------------------------------------
+    async def authorize(self, target: SshTarget) -> None:
+        """Первый вход по паролю: добавить открытый ключ координатора в authorized_keys."""
+        if not target.password:
+            raise SshFailure(422, "password_required", "для первичной авторизации нужен пароль")
+        key = self.public_key(target.key_ref)
+        script = (
+            'umask 077; mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"; '
+            'touch "$HOME/.ssh/authorized_keys"; chmod 600 "$HOME/.ssh/authorized_keys"; '
+            f"grep -qxF {shlex.quote(key)} \"$HOME/.ssh/authorized_keys\" || "
+            f"printf '%s\\n' {shlex.quote(key)} >> \"$HOME/.ssh/authorized_keys\""
+        )
+        await self._run(target, script)
+        self._drop(target)
+        log.info("на %s установлен открытый ключ координатора", target.address)
+
+    async def open_file(self, target: SshTarget, path: str) -> "RemoteFile":
+        """Открывает файл на сервере для галереи. Ошибки — здесь, до начала ответа."""
+        connection = await self._connection(target)
+        try:
+            sftp = await connection.start_sftp_client()
+        except (OSError, asyncssh.Error) as exc:
+            self._drop(target)
+            raise SshFailure(
+                502, "ssh_sftp_failed", f"SFTP на {target.address}: {type(exc).__name__}",
+            ) from exc
+        try:
+            handle = await sftp.open(path, "rb")
+            size = (await handle.stat()).size or 0
+        except (OSError, asyncssh.Error) as exc:
+            sftp.exit()
+            raise SshFailure(
+                404, "file_not_found", f"файла {path} на {target.address} нет",
+            ) from exc
+        return RemoteFile(sftp, handle, size)
+
     async def status(self, target: SshTarget) -> dict[str, Any]:
         values = parse_key_value(await self._run(target, _STATUS))
         return {
@@ -313,6 +368,12 @@ class SshManager:
                     async with sftp.open(f"{base}/agent.env", "wb", attrs) as remote_file:
                         await remote_file.write(_render_env(env).encode())
                     await sftp.chmod(f"{base}/agent.env", 0o600)
+                    # Открытый сертификат CA стенда: на настоящей машине общего тома /certs
+                    # нет, а без него агент не проверит HTTPS координатора.
+                    ca = self.bundles_dir / "ca.crt"
+                    if ca.is_file():
+                        async with sftp.open(f"{base}/ca.crt", "wb") as remote_file:
+                            await remote_file.write(ca.read_bytes())
         except (OSError, asyncssh.Error, TimeoutError) as exc:
             self._drop(target)
             raise SshFailure(
@@ -342,6 +403,40 @@ class SshManager:
                 502, "ssh_unreachable", f"терминал {target.address}: {type(exc).__name__}",
             ) from exc
         return SshTerminalStream(process)
+
+
+class RemoteFile:
+    """Открытый по SFTP файл: отдаётся кусками, целиком в память не читается."""
+
+    CHUNK = 256 * 1024
+
+    def __init__(self, sftp: Any, handle: Any, size: int) -> None:
+        self.sftp = sftp
+        self.handle = handle
+        self.size = size
+
+    async def iterate(self, start: int = 0, length: int | None = None) -> AsyncIterator[bytes]:
+        try:
+            if start:
+                await self.handle.seek(start)
+            remaining = length
+            while remaining is None or remaining > 0:
+                size = self.CHUNK if remaining is None else min(self.CHUNK, remaining)
+                chunk = await self.handle.read(size)
+                if not chunk:
+                    break
+                if remaining is not None:
+                    remaining -= len(chunk)
+                yield chunk
+        finally:
+            await self.close()
+
+    async def close(self) -> None:
+        try:
+            await self.handle.close()
+        except (OSError, asyncssh.Error):
+            pass
+        self.sftp.exit()
 
 
 def _render_env(env: dict[str, str]) -> str:

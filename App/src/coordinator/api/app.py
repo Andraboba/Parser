@@ -19,6 +19,7 @@ from coordinator.api import servers as servers_api
 from coordinator.api import system as system_api
 from coordinator.api import terminal as terminal_api
 from coordinator.api import tokens as tokens_api
+from coordinator.api import videos as videos_api
 from coordinator.api import workers as workers_api
 from coordinator.config import Settings
 from coordinator.errors import CoordinatorError
@@ -56,6 +57,7 @@ def create_app(settings: Settings | None = None, runner: RunnerClient | None = N
     app.include_router(monitoring_api.router)
     app.include_router(tokens_api.router)
     app.include_router(terminal_api.router)
+    app.include_router(videos_api.router)
     app.middleware("http")(_audit_requests)
     app.add_exception_handler(CoordinatorError, _on_coordinator_error)
     app.add_exception_handler(RequestValidationError, _on_validation_error)

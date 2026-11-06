@@ -8,11 +8,11 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from coordinator.config import Settings
@@ -41,9 +41,11 @@ class TargetIn(BaseModel):
     port: int = Field(default=22, ge=1, le=65535)
     user: str = Field(pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
     key_ref: str = Field(max_length=64)
+    # Только для первичного входа по паролю; в журнал и ответ не попадает.
+    password: str | None = Field(default=None, max_length=256)
 
     def to_target(self) -> SshTarget:
-        return SshTarget(self.host, self.port, self.user, self.key_ref)
+        return SshTarget(self.host, self.port, self.user, self.key_ref, self.password)
 
 
 class TargetBody(BaseModel):
@@ -57,6 +59,13 @@ class LogsBody(TargetBody):
 class DeployBody(TargetBody):
     kind: str = Field(max_length=64)
     env: dict[str, str] = {}
+
+
+class FileBody(TargetBody):
+    path: str = Field(min_length=1, max_length=4096)
+    start: int = Field(default=0, ge=0)
+    # Пусто — до конца файла.
+    length: int | None = Field(default=None, gt=0)
 
 
 class CreateServer(BaseModel):
@@ -190,6 +199,28 @@ def create_runner_app(
     @http.post("/ssh/status")
     async def ssh_status(body: TargetBody, manager: SshDep) -> dict[str, Any]:
         return await manager.status(body.target.to_target())
+
+    @http.post("/ssh/authorize", status_code=204)
+    async def ssh_authorize(body: TargetBody, manager: SshDep) -> None:
+        await manager.authorize(body.target.to_target())
+        log.info("на %s установлен ключ координатора", body.target.host)
+
+    @http.post("/ssh/file")
+    async def ssh_file(body: FileBody, manager: SshDep) -> StreamingResponse:
+        """Часть файла с сервера для галереи. Какой файл можно читать, решил api."""
+        path = PurePosixPath(body.path)
+        if not path.is_absolute() or ".." in path.parts:
+            raise HTTPException(422, "путь должен быть абсолютным и без ..")
+        remote = await manager.open_file(body.target.to_target(), body.path)
+        start = min(body.start, remote.size)
+        length = remote.size - start
+        if body.length is not None:
+            length = min(length, body.length)
+        return StreamingResponse(
+            remote.iterate(start, length),
+            media_type="application/octet-stream",
+            headers={"X-File-Size": str(remote.size), "Content-Length": str(length)},
+        )
 
     @http.post("/ssh/start", status_code=204)
     async def ssh_start(body: TargetBody, manager: SshDep) -> None:

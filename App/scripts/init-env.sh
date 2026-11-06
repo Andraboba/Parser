@@ -55,13 +55,23 @@ if [ "${1:-}" = "--renew-tls" ] || [ ! -f deploy/tls/server.crt ]; then
     -addext "subjectKeyIdentifier=hash" 2>/dev/null
   openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr \
     -subj "/CN=coordinator" 2>/dev/null
-  cat > server.ext <<'EXT'
+  # Внешний адрес стенда (COORD_PUBLIC_HOST): сертификат должен его покрывать, иначе
+  # браузер и агенты на настоящих машинах не примут HTTPS.
+  san="DNS:localhost,DNS:web,DNS:coordinator,IP:127.0.0.1"
+  public="${COORD_PUBLIC_HOST:-}"
+  if [ -z "$public" ] && [ -f ../../.env ]; then
+    public="$(sed -n 's/^COORD_PUBLIC_HOST=//p' ../../.env | tail -n 1)"
+  fi
+  if [ -n "$public" ]; then
+    if printf '%s' "$public" | grep -Eq '^[0-9.]+$|:'; then san="$san,IP:$public"; else san="$san,DNS:$public"; fi
+  fi
+  cat > server.ext <<EXT
 basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature,keyEncipherment
 extendedKeyUsage=serverAuth
 subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid,issuer
-subjectAltName=DNS:localhost,DNS:web,DNS:coordinator,IP:127.0.0.1
+subjectAltName=$san
 EXT
   openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 -sha256 \
     -extfile server.ext -out server.crt 2>/dev/null

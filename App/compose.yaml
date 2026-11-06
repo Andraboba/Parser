@@ -14,7 +14,12 @@ x-app-env: &app-env
   COORD_COOKIE_SECURE: "true"
   COORD_AGENT_KIND: ${COORD_AGENT_KIND:-real}
   # Управляемый тестовый сайт стенда. Настоящий внешний сайт задаётся только явно.
-  COORD_AGENT_SITE_TEMPLATE: http://site:8081/page/{id}
+  COORD_AGENT_SITE_TEMPLATE: ${COORD_AGENT_SITE_TEMPLATE:-http://site:8081/page/{id}}
+  # Внешний адрес стенда для агентов на настоящих машинах (серверы, добавленные по IP), например
+  # https://203.0.113.5:8443. Контейнеры worker-* стенда ходят внутри сети, на https://web.
+  COORD_AGENT_PUBLIC_URL: ${COORD_AGENT_PUBLIC_URL:-}
+  # Имена серверов, на которые можно входить по SSH. IP-адреса разрешены всегда (только админу).
+  COORD_SSH_ALLOWED_HOSTS: ${COORD_SSH_ALLOWED_HOSTS:-worker-*,lab-*}
 
 x-server: &server
   build: { context: deploy/ssh-server }
@@ -22,7 +27,6 @@ x-server: &server
   restart: unless-stopped
   # Агент здесь обычный процесс: кто-то должен прибирать завершившиеся процессы.
   init: true
-  pids_limit: 256
   secrets: [ssh_client_key_pub]
   depends_on:
     tls-init: { condition: service_completed_successfully }
@@ -130,6 +134,8 @@ services:
       - ./deploy/real-agent/agent.yaml:/bundles/real/agent.yaml:ro
       - ./deploy/real-agent/run.sh:/bundles/real/run.sh:ro
       - ./stub:/bundles/stub:ro
+      # Открытый сертификат CA: его получают агенты на настоящих машинах.
+      - ./deploy/tls/ca.crt:/bundles/ca.crt:ro
     depends_on:
       migrate: { condition: service_completed_successfully }
     deploy:
@@ -182,7 +188,7 @@ services:
     volumes: ["videos-01:/data/videos", "ssh-keys-01:/etc/ssh/keys", "tls-ca:/certs:ro"]
     deploy:
       resources:
-        limits: { cpus: "1.0", memory: 512m }
+        limits: { cpus: "1.0", memory: 512m, pids: 256 }
 
   worker-02:
     <<: *server
@@ -190,7 +196,7 @@ services:
     volumes: ["videos-02:/data/videos", "ssh-keys-02:/etc/ssh/keys", "tls-ca:/certs:ro"]
     deploy:
       resources:
-        limits: { cpus: "2.0", memory: 1g }
+        limits: { cpus: "2.0", memory: 1g, pids: 256 }
 
   worker-03:
     <<: *server
@@ -198,7 +204,7 @@ services:
     volumes: ["videos-03:/data/videos", "ssh-keys-03:/etc/ssh/keys", "tls-ca:/certs:ro"]
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 256m }
+        limits: { cpus: "0.5", memory: 256m, pids: 256 }
 
   # Метрики и дашборд: docker compose --profile monitoring up -d
   prometheus:

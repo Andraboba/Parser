@@ -4,7 +4,7 @@ agent:
   name: worker
   threads: 4
   storage_path: /data/videos
-  state_dir: /data/videos/.agent
+  # state_dir не задан: каталог состояния — <storage_path>/.agent, в том числе на настоящей машине.
   min_free_space_gb: 1
   log_level: INFO
   log_json: true

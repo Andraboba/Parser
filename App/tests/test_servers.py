@@ -151,6 +151,50 @@ class TestCreate:
         login(other, "op")
         assert other.post("/api/servers", json=SERVER).status_code == 403
 
+    def test_real_machine_by_ip_and_password(self, api: TestClient, runner: FakeRunner) -> None:
+        card = create(api, host="203.0.113.5", ssh_user="root", ssh_password="s3cret")
+        assert card["ssh_host"] == "203.0.113.5"
+        path, body = runner.calls[0]
+        assert path == "/ssh/authorize"
+        assert body["target"] == {
+            "host": "203.0.113.5", "port": 22, "user": "root", "key_ref": "ssh_client_key",
+            "password": "s3cret",
+        }
+        # Пароль не хранится: карточка и дальнейшие вызовы его не содержат.
+        assert "s3cret" not in json.dumps(api.get(f"/api/workers/{card['id']}").json())
+        api.post(f"/api/workers/{card['id']}/agent/check")
+        assert "password" not in runner.calls[-1][1]["target"]
+
+    def test_wrong_password_leaves_no_row(self, api: TestClient, runner: FakeRunner) -> None:
+        runner.fail = RunnerRejected(403, "ssh_auth_failed", "сервер отклонил логин или пароль")
+        resp = api.post("/api/servers", json={**SERVER, "host": "203.0.113.5", "ssh_password": "x"})
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "ssh_auth_failed"
+        assert not [w for w in api.get("/api/workers").json() if w["name"] == SERVER["name"]]
+
+    def test_authorize_existing_server(self, api: TestClient, runner: FakeRunner) -> None:
+        card = create(api)
+        resp = api.post(f"/api/workers/{card['id']}/agent/authorize", json={"password": "pw"})
+        assert resp.status_code == 200, resp.text
+        path, body = runner.calls[-1]
+        assert path == "/ssh/authorize"
+        assert body["target"]["password"] == "pw"
+
+    def test_remote_agent_gets_public_url(self, clean_db: None, runner: FakeRunner) -> None:
+        settings = Settings(
+            image_update_timeout=1, agent_site_template="http://site/{id}",
+            agent_public_url="https://203.0.113.1:9443/",
+        )
+        with TestClient(create_app(settings, runner=runner)) as client:
+            login(client)
+            local = create(client)
+            remote = create(client, name="real-1", host="203.0.113.5")
+            for card in (local, remote):
+                client.post(f"/api/workers/{card['id']}/agent/deploy", json={})
+        urls = [body["env"]["AGENT_COORDINATOR_URL"] for path, body in runner.calls
+                if path == "/ssh/deploy"]
+        assert urls == ["https://web", "https://203.0.113.1:9443"]
+
 
 class TestRegistration:
     def test_agent_registration_keeps_server_mode_and_address(self, api: TestClient) -> None:

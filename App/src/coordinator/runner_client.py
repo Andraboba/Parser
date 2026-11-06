@@ -86,3 +86,29 @@ class RunnerClient:
                 str(body.get("detail", "ошибка runner-а")),
             )
         return response.json() if response.content else None
+
+    @asynccontextmanager
+    async def stream(self, method: str, path: str, **kwargs: Any) -> AsyncIterator[httpx.Response]:
+        """Потоковый ответ runner-а: файлы галереи не читаются в память целиком."""
+        if not self.configured:
+            raise RunnerUnavailable("runner не настроен: контейнеры управляются через compose")
+        request = self._client.build_request(method, path, **kwargs)
+        try:
+            response = await self._client.send(request, stream=True)
+        except httpx.HTTPError as exc:
+            raise RunnerUnavailable(f"runner недоступен: {type(exc).__name__}") from exc
+        if response.status_code >= 400:
+            await response.aread()
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            await response.aclose()
+            raise RunnerRejected(
+                response.status_code, str(body.get("code", "runner_error")),
+                str(body.get("detail", "ошибка runner-а")),
+            )
+        try:
+            yield response
+        finally:
+            await response.aclose()
